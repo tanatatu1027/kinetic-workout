@@ -169,7 +169,7 @@ const FAMILY: Record<Family, { label: string; regions: Region[] }> = {
   push: { label: 'PUSH（押す日）', regions: ['chest', 'shoulders', 'triceps'] },
   pull: { label: 'PULL（引く日）', regions: ['lats', 'traps', 'biceps', 'forearms', 'lowback'] },
   legs: { label: 'LEGS（脚の日）', regions: ['quads', 'hamstrings', 'glutes', 'calves'] },
-  core: { label: 'CORE（体幹の日）', regions: ['abs', 'obliques'] },
+  core: { label: 'CORE（腹筋の日）', regions: ['abs', 'obliques'] },
 }
 
 export interface Advice {

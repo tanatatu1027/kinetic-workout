@@ -6,7 +6,7 @@ export const MUSCLES: { id: Muscle; label: string; short: string; color: string 
   { id: 'legs', label: '脚', short: '脚', color: '#b9ff4a' },
   { id: 'shoulders', label: '肩', short: '肩', color: '#ffc043' },
   { id: 'arms', label: '腕', short: '腕', color: '#bf9bff' },
-  { id: 'core', label: '体幹', short: '幹', color: '#ff9a5c' },
+  { id: 'core', label: '腹筋', short: '腹', color: '#ff9a5c' },
 ]
 
 export const muscleOf = (id: Muscle) => MUSCLES.find((m) => m.id === id)!
@@ -20,7 +20,7 @@ export const EQUIPMENT_LABEL: Record<Equipment, string> = {
 }
 
 /** 回数ではなく秒数で記録する種目 */
-export const isSeconds = (id: string) => id === 'plank'
+export const isSeconds = (id: string) => id === 'plank' || id === 'side-plank'
 
 /** ダンベルは2kg刻みが一般的なので、設定の増減幅が大きくても2kgまでに抑える */
 export const stepFor = (equipment: Equipment, base: number) => (equipment === 'dumbbell' ? Math.min(base, 2) : base)
@@ -78,6 +78,21 @@ export const PRESET_EXERCISES: Exercise[] = [
   e('leg-raise', 'レッグレイズ', 'core', 'bodyweight'),
   e('ab-roller', 'アブローラー', 'core', 'bodyweight'),
   e('cable-crunch', 'ケーブルクランチ', 'core', 'cable'),
+  e('ab-machine', 'アブドミナルマシン', 'core', 'machine'),
+  e('rotary-torso', 'ロータリートーソ', 'core', 'machine'),
+  e('captain-leg-raise', 'キャプテンチェア レッグレイズ', 'core', 'machine'),
+  e('hanging-leg-raise', 'ハンギングレッグレイズ', 'core', 'bodyweight'),
+  e('hanging-knee-raise', 'ハンギングニーレイズ', 'core', 'bodyweight'),
+  e('situp', 'シットアップ', 'core', 'bodyweight'),
+  e('decline-situp', 'デクラインシットアップ', 'core', 'bodyweight'),
+  e('bicycle-crunch', 'バイシクルクランチ', 'core', 'bodyweight'),
+  e('side-plank', 'サイドプランク（秒）', 'core', 'bodyweight'),
+  e('weighted-crunch', 'ウェイテッドクランチ', 'core', 'dumbbell'),
+  e('russian-twist', 'ロシアンツイスト', 'core', 'dumbbell'),
+  e('side-bend', 'サイドベンド', 'core', 'dumbbell'),
+  e('woodchop', 'ケーブルウッドチョップ', 'core', 'cable'),
+  e('pallof', 'パロフプレス', 'core', 'cable'),
+  e('cable-twist', 'ケーブルツイスト', 'core', 'cable'),
 ]
 
 const t = (id: string, name: string, items: [string, number][]): Template => ({
@@ -92,5 +107,5 @@ export const BUILTIN_TEMPLATES: Template[] = [
   t('tpl-full-b', '全身 B（初心者向け）', [['deadlift', 3], ['ohp', 3], ['lat-pulldown', 3], ['crunch', 2]]),
   t('tpl-push', 'PUSH（胸・肩・三頭）', [['bench', 4], ['incline-db', 3], ['ohp', 3], ['lateral', 3], ['pushdown', 3]]),
   t('tpl-pull', 'PULL（背中・二頭）', [['deadlift', 3], ['lat-pulldown', 3], ['seated-row', 3], ['face-pull', 3], ['db-curl', 3]]),
-  t('tpl-legs', 'LEGS（脚・体幹）', [['squat', 4], ['rdl', 3], ['leg-press', 3], ['leg-curl', 3], ['calf-raise', 3]]),
+  t('tpl-legs', 'LEGS（脚）', [['squat', 4], ['rdl', 3], ['leg-press', 3], ['leg-curl', 3], ['calf-raise', 3]]),
 ]
