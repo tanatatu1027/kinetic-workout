@@ -86,7 +86,8 @@ function VolCard({ label, t, unit, per, icon }: { label: string; t: number; unit
     <div className="vol-card">
       <span>{label}</span>
       <b className="num">{fmtTon(t)}<small>t</small></b>
-      <em>{icon} {unit} ×{(t / 1000 / per).toFixed(1)}</em>
+      <em>×{(t / 1000 / per).toFixed(1)}</em>
+      <span className="vol-unit">{icon} {unit}</span>
     </div>
   )
 }
