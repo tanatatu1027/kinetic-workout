@@ -1,36 +1,11 @@
 import { useEffect, useRef } from 'react'
-import {
-  AmbientLight,
-  BoxGeometry,
-  Color,
-  CylinderGeometry,
-  DirectionalLight,
-  Euler,
-  Group,
-  LatheGeometry,
-  Matrix4,
-  Mesh,
-  MeshBasicMaterial,
-  MeshStandardMaterial,
-  PerspectiveCamera,
-  Quaternion,
-  Raycaster,
-  RingGeometry,
-  Scene,
-  SphereGeometry,
-  SplineCurve,
-  Vector2,
-  Vector3,
-  WebGLRenderer,
-  DoubleSide,
-  type BufferGeometry,
-} from 'three'
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
-import { REGIONS, regionInfo, type Region } from '../data/regions'
+import { REGIONS, type Region } from '../data/regions'
+import frontUrl from '../assets/body-front.png'
+import backUrl from '../assets/body-back.png'
 
 export interface RegionLook {
   color: string
-  /** 0〜1。発光の強さ（回復途中の疲労が強いほど大きい） */
+  /** 0〜1。明るさの強さ（回復途中の疲労が強いほど大きい） */
   strength: number
 }
 
@@ -46,109 +21,58 @@ interface Props {
   paused?: boolean
 }
 
-type V3 = [number, number, number]
-
-/** 体表に塗る筋肉の領域（楕円体）。中心と半径は体の座標系。x軸で左右対称に複製する */
-interface Zone {
-  region: Region
-  c: V3
-  r: V3
-  mirror?: boolean
-}
-
-// y=0 が腰の少し上。身長はおよそ -1.08〜1.0。+zが正面
-const ZONES: Zone[] = [
-  { region: 'chest', c: [0.098, 0.565, 0.085], r: [0.112, 0.078, 0.07], mirror: true },
-  { region: 'shoulders', c: [0.262, 0.635, 0.0], r: [0.062, 0.095, 0.075], mirror: true },
-  { region: 'traps', c: [0, 0.63, -0.1], r: [0.1, 0.15, 0.07] },
-  { region: 'traps', c: [0.1, 0.71, -0.03], r: [0.1, 0.05, 0.09], mirror: true },
-  { region: 'lats', c: [0.135, 0.4, -0.08], r: [0.08, 0.17, 0.07], mirror: true },
-  { region: 'lowback', c: [0.045, 0.17, -0.07], r: [0.045, 0.11, 0.06], mirror: true },
-  { region: 'biceps', c: [0.272, 0.46, 0.03], r: [0.055, 0.115, 0.045], mirror: true },
-  { region: 'triceps', c: [0.272, 0.46, -0.03], r: [0.055, 0.12, 0.045], mirror: true },
-  { region: 'forearms', c: [0.292, 0.17, 0], r: [0.055, 0.14, 0.055], mirror: true },
-  { region: 'abs', c: [0.036, 0.46, 0.085], r: [0.044, 0.033, 0.05], mirror: true },
-  { region: 'abs', c: [0.036, 0.395, 0.08], r: [0.045, 0.033, 0.05], mirror: true },
-  { region: 'abs', c: [0.036, 0.327, 0.074], r: [0.045, 0.033, 0.05], mirror: true },
-  { region: 'abs', c: [0.036, 0.258, 0.072], r: [0.045, 0.033, 0.05], mirror: true },
-  { region: 'abs', c: [0.034, 0.19, 0.07], r: [0.042, 0.036, 0.05], mirror: true },
-  { region: 'obliques', c: [0.128, 0.34, 0.05], r: [0.05, 0.13, 0.07], mirror: true },
-  { region: 'glutes', c: [0.078, -0.02, -0.09], r: [0.092, 0.1, 0.075], mirror: true },
-  { region: 'quads', c: [0.095, -0.32, 0.07], r: [0.085, 0.25, 0.075], mirror: true },
-  { region: 'hamstrings', c: [0.095, -0.32, -0.07], r: [0.085, 0.25, 0.075], mirror: true },
-  { region: 'calves', c: [0.075, -0.72, -0.04], r: [0.065, 0.16, 0.055], mirror: true },
-]
-
 const ORDER: Region[] = REGIONS.map((r) => r.id)
-const zoneList = ZONES.flatMap((z) =>
-  (z.mirror ? [1, -1] : [1]).map((sx) => ({ region: z.region, c: [z.c[0] * sx, z.c[1], z.c[2]] as V3, r: z.r })),
-)
 
-/** 回転体で作る手足。keys は [y, 半径] を下から上へ。スプラインでなめらかに補間する */
-const limb = (keys: [number, number][], radial = 28) => {
-  const curve = new SplineCurve(keys.map(([y, r]) => new Vector2(r, y)))
-  const pts = curve.getPoints(24)
-  pts.unshift(new Vector2(0, keys[0][0]))
-  pts.push(new Vector2(0, keys[keys.length - 1][0]))
-  return new LatheGeometry(pts, radial)
+/**
+ * 筋肉図（正面・背面）を、ターンテーブルのように横幅を縮めながら入れ替えて360°回す。
+ * テクスチャは R=線と筋肉の形、G=部位ID（ORDERの順+1）。scripts/make-body-textures.py で作成。
+ */
+interface View {
+  w: number
+  h: number
+  lum: Uint8Array
+  reg: Uint8Array
+  /** 部位ごとの画素番号 */
+  pix: number[][]
+  off: HTMLCanvasElement
+  ctx: CanvasRenderingContext2D
+  img: ImageData
 }
 
-// 胴体：腰→くびれ→ろく骨→広い肩→首へのなだらかな僧帽筋の傾斜
-const torsoGeo = new LatheGeometry(
-  [
-    [0.0, -0.08], [0.15, -0.08], [0.168, 0.0], [0.15, 0.12], [0.138, 0.24], [0.15, 0.38],
-    [0.185, 0.5], [0.215, 0.6], [0.215, 0.67], [0.16, 0.73], [0.075, 0.77], [0.045, 0.8], [0.0, 0.8],
-  ].map(([r, y]) => new Vector2(r, y)),
-  36,
-)
+const loadImage = (src: string) =>
+  new Promise<HTMLImageElement>((res, rej) => {
+    const i = new Image()
+    i.onload = () => res(i)
+    i.onerror = () => rej(new Error('image'))
+    i.src = src
+  })
 
-interface Part {
-  geo: BufferGeometry
-  pos: V3
-  scale?: V3
-  rot?: V3
-  mirror?: boolean
-}
-
-const PARTS: Part[] = [
-  { geo: new SphereGeometry(0.1, 32, 24), pos: [0, 0.91, 0.012], scale: [0.86, 1.14, 1.0] },
-  { geo: new CylinderGeometry(0.046, 0.054, 0.14, 20), pos: [0, 0.79, 0] },
-  { geo: torsoGeo, pos: [0, 0, 0], scale: [1, 1, 0.5] },
-  // 胸板・三角筋・臀部の盛り上がり
-  { geo: new SphereGeometry(1, 28, 20), pos: [0.098, 0.565, 0.078], scale: [0.108, 0.072, 0.05], mirror: true },
-  { geo: new SphereGeometry(1, 24, 18), pos: [0.258, 0.63, 0.0], scale: [0.058, 0.085, 0.066], mirror: true },
-  { geo: new SphereGeometry(1, 24, 18), pos: [0.078, -0.02, -0.07], scale: [0.088, 0.1, 0.078], mirror: true },
-  // 腕（上腕→前腕→手）
-  { geo: limb([[0.3, 0.036], [0.4, 0.043], [0.5, 0.05], [0.58, 0.05], [0.64, 0.044]]), pos: [0.272, 0, 0], mirror: true },
-  { geo: limb([[-0.0, 0.024], [0.08, 0.03], [0.18, 0.038], [0.24, 0.04], [0.3, 0.034]]), pos: [0.292, 0, 0], mirror: true },
-  { geo: new SphereGeometry(0.03, 16, 12), pos: [0.3, -0.04, 0], scale: [0.85, 1.5, 0.6], mirror: true },
-  // 脚（腿→すね）
-  { geo: limb([[-0.58, 0.05], [-0.45, 0.062], [-0.32, 0.088], [-0.15, 0.1], [-0.02, 0.098]], 32), pos: [0.093, 0, 0], mirror: true },
-  { geo: limb([[-1.0, 0.026], [-0.9, 0.034], [-0.78, 0.04], [-0.7, 0.054], [-0.64, 0.056], [-0.58, 0.05]], 28), pos: [0.083, 0, -0.004], mirror: true },
-  { geo: new SphereGeometry(0.05, 16, 12), pos: [0.083, -1.05, 0.045], scale: [0.85, 0.65, 2.0], mirror: true },
-]
-
-const bodyGeo = (() => {
-  const geos: BufferGeometry[] = []
-  const m = new Matrix4()
-  for (const p of PARTS) {
-    for (const sx of p.mirror ? [1, -1] : [1]) {
-      const g = p.geo.clone()
-      m.compose(
-        new Vector3(p.pos[0] * sx, p.pos[1], p.pos[2]),
-        new Quaternion().setFromEuler(new Euler(...(p.rot ?? [0, 0, 0]))),
-        new Vector3(...(p.scale ?? [1, 1, 1])),
-      )
-      g.applyMatrix4(m)
-      geos.push(g)
-    }
+async function loadView(src: string): Promise<View> {
+  const im = await loadImage(src)
+  const w = im.naturalWidth
+  const h = im.naturalHeight
+  const off = document.createElement('canvas')
+  off.width = w
+  off.height = h
+  const ctx = off.getContext('2d', { willReadFrequently: true })!
+  ctx.drawImage(im, 0, 0)
+  const src4 = ctx.getImageData(0, 0, w, h).data
+  const lum = new Uint8Array(w * h)
+  const reg = new Uint8Array(w * h)
+  const pix: number[][] = ORDER.map(() => [])
+  for (let p = 0; p < w * h; p++) {
+    lum[p] = src4[p * 4]
+    const g = src4[p * 4 + 1]
+    reg[p] = g
+    if (g > 0 && g <= ORDER.length) pix[g - 1].push(p)
   }
-  const merged = mergeGeometries(geos, false)!
-  merged.computeVertexNormals()
-  return merged
-})()
+  return { w, h, lum, reg, pix, off, ctx, img: ctx.createImageData(w, h) }
+}
 
-const SKIN = new Color('#3d5066')
+const hex = (c: string): [number, number, number] => {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(c)
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255]
+}
 
 export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAngle, paused }: Props) {
   const host = useRef<HTMLDivElement>(null)
@@ -166,114 +90,26 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
   useEffect(() => {
     const el = host.current
     if (!el) return
-
-    let renderer: WebGLRenderer
-    try {
-      renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' })
-    } catch {
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
       onUnsupported?.()
       return
     }
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-    renderer.setClearColor(0x000000, 0)
-    const canvas = renderer.domElement
     canvas.className = 'body-canvas'
     canvas.setAttribute('role', 'img')
-    canvas.setAttribute('aria-label', '人体モデル。ドラッグで回転、部位をタップで選択')
+    canvas.setAttribute('aria-label', '人体の筋肉図。ドラッグで回転、部位をタップで選択')
     el.appendChild(canvas)
 
-    const scene = new Scene()
-    const camera = new PerspectiveCamera(30, 1, 0.1, 50)
-    camera.position.set(0, 0.02, 4.5)
-    scene.add(new AmbientLight(0xffffff, 0.8))
-    const key = new DirectionalLight(0xffffff, 1.2)
-    key.position.set(2, 3, 4)
-    scene.add(key)
-    const rim = new DirectionalLight(0x22d3ee, 0.8)
-    rim.position.set(-3, 1, -3)
-    scene.add(rim)
-
-    const disposables: { dispose: () => void }[] = []
-    const track = <T extends { dispose: () => void }>(o: T) => {
-      disposables.push(o)
-      return o
-    }
-
-    const body = new Group()
-    scene.add(body)
-
-    // 体表シェーダー：各筋肉の楕円領域に回復状況の色を塗り、筋肉の境目に細い溝を入れる
-    const N = zoneList.length
-    const NR = ORDER.length
-    const uniforms = {
-      uC: { value: zoneList.map((z) => new Vector3(...z.c)) },
-      uR: { value: zoneList.map((z) => new Vector3(...z.r)) },
-      uI: { value: zoneList.map((z) => ORDER.indexOf(z.region)) },
-      uCol: { value: ORDER.map(() => new Color('#4a5d6e')) },
-      uAmt: { value: ORDER.map(() => 0) },
-      uSel: { value: ORDER.map(() => 0) },
-      uSkin: { value: SKIN },
-    }
-    const bodyMat = track(new MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.05 }))
-    bodyMat.onBeforeCompile = (sh) => {
-      Object.assign(sh.uniforms, uniforms)
-      sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', 'varying vec3 vBP;\n#include <common>')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBP = position;')
-      sh.fragmentShader = sh.fragmentShader
-        .replace(
-          '#include <common>',
-          `#include <common>
-          varying vec3 vBP;
-          uniform vec3 uC[${N}]; uniform vec3 uR[${N}]; uniform float uI[${N}];
-          uniform vec3 uCol[${NR}]; uniform float uAmt[${NR}]; uniform float uSel[${NR}];
-          uniform vec3 uSkin;`,
-        )
-        .replace(
-          '#include <color_fragment>',
-          `float rw[${NR}];
-          for (int k = 0; k < ${NR}; k++) rw[k] = 0.0;
-          float groove = 0.0; float bulge = 0.0;
-          for (int i = 0; i < ${N}; i++) {
-            vec3 q = (vBP - uC[i]) / uR[i]; float d = mix(length(q), max(max(abs(q.x), abs(q.y)), abs(q.z)), 0.45);
-            int r = int(uI[i] + 0.5);
-            bulge = max(bulge, 1.0 - d);
-            rw[r] = max(rw[r], 1.0 - smoothstep(0.78, 0.97, d));
-            groove = max(groove, smoothstep(0.84, 0.97, d) * (1.0 - smoothstep(0.97, 1.1, d)));
-          }
-          vec3 gEm = vec3(0.0);
-          vec3 base = uSkin;
-          for (int k = 0; k < ${NR}; k++) {
-            base = mix(base, uCol[k], rw[k] * 0.95);
-            gEm += uCol[k] * rw[k] * (0.08 + 0.32 * uAmt[k]) + vec3(1.0) * rw[k] * uSel[k];
-          }
-          diffuseColor.rgb = base * (0.78 + 0.45 * bulge) * (1.0 - 0.42 * groove);`,
-        )
-        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += gEm;')
-    }
-    const bodyMesh = new Mesh(track(bodyGeo.clone()), bodyMat)
-    body.add(bodyMesh)
-
-    const centers = zoneList.map((z) => ({ region: z.region, c: new Vector3(...z.c), r: z.r }))
-
-    // 足元のHUDリング
-    const hud = new Group()
-    hud.position.y = -1.1
-    hud.rotation.x = -Math.PI / 2
-    scene.add(hud)
-    const ringMat = track(new MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.55, side: DoubleSide }))
-    const ring1 = track(new RingGeometry(0.52, 0.535, 72))
-    const ring2 = track(new RingGeometry(0.66, 0.67, 72, 1, 0, Math.PI * 1.5))
-    hud.add(new Mesh(ring1, ringMat), new Mesh(ring2, ringMat))
-    const ticks = new Group()
-    for (let i = 0; i < 24; i++) {
-      const t = new Mesh(track(new BoxGeometry(0.008, i % 6 === 0 ? 0.07 : 0.035, 0.001)), ringMat)
-      const a = (i / 24) * Math.PI * 2
-      t.position.set(Math.cos(a) * 0.58, Math.sin(a) * 0.58, 0)
-      t.rotation.z = a + Math.PI / 2
-      ticks.add(t)
-    }
-    hud.add(ticks)
+    let disposed = false
+    let views: [View, View] | null = null // [正面, 背面]
+    Promise.all([loadView(frontUrl), loadView(backUrl)])
+      .then((v) => {
+        if (!disposed) views = v
+      })
+      .catch(() => {
+        if (!disposed) onUnsupported?.()
+      })
 
     // 回転・操作
     let rotY = 0.5
@@ -282,60 +118,48 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
     let spin = true
     let down: { x: number; y: number; t: number; lastX: number; moved: boolean; id: number } | null = null
     let lastMoveT = 0
-    const ray = new Raycaster()
-    const pointer = new Vector2()
+    let cw = 0
+    let ch = 0
+    let dpr = 1
 
-    // 向きに応じて、裏側にしか見えない部位は選べないようにする（正面で背中の筋肉を拾わない）
-    const allowed = (region: Region) => {
-      const side = regionInfo(region).side
-      const facing = Math.cos(rotY)
-      if (side === 'back') return facing < 0.35
-      if (side === 'front') return facing > -0.35
-      return true
+    // 図の配置（正面・背面で共通）
+    const layout = () => {
+      const v = views?.[0]
+      if (!v) return null
+      const s = Math.min(ch / v.h, cw / v.w)
+      return { s, ox: cw / 2, oy: (ch - v.h * s) / 2, v }
     }
-    const world = new Vector3()
-    const local = new Vector3()
+    const facing = () => Math.cos(rotY)
+
     const pick = (cx: number, cy: number) => {
-      const r = canvas.getBoundingClientRect()
-      pointer.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1)
-      ray.setFromCamera(pointer, camera)
-      // 体表に当たった点が、どの筋肉の領域に入っているかで判定する
-      const hit = ray.intersectObject(bodyMesh, false)[0]
-      if (hit) {
-        local.copy(hit.point)
-        bodyMesh.worldToLocal(local)
-        let best: Region | null = null
-        let bestD = 1
-        for (const z of centers) {
-          if (!allowed(z.region)) continue
-          const d = Math.hypot((local.x - z.c.x) / z.r[0], (local.y - z.c.y) / z.r[1], (local.z - z.c.z) / z.r[2])
-          if (d < bestD) {
+      const L = layout()
+      if (!L || !views) return
+      const k = facing()
+      if (Math.abs(k) < 0.3) return
+      const view = k > 0 ? views[0] : views[1]
+      const rect = canvas.getBoundingClientRect()
+      const px = cx - rect.left
+      const py = cy - rect.top
+      const sx = L.s * Math.abs(k)
+      const u = (px - L.ox) / sx + view.w / 2
+      const v = (py - L.oy) / L.s
+      // ぴったり当たらなくても、指の大きさ分（約24px）の範囲で最も近い部位を選ぶ
+      const rx = 24 / sx
+      const ry = 24 / L.s
+      let best = -1
+      let bestD = Infinity
+      for (let y = Math.max(0, Math.floor(v - ry)); y <= Math.min(view.h - 1, Math.ceil(v + ry)); y += 2) {
+        for (let x = Math.max(0, Math.floor(u - rx)); x <= Math.min(view.w - 1, Math.ceil(u + rx)); x += 2) {
+          const g = view.reg[y * view.w + x]
+          if (!g || g > ORDER.length) continue
+          const d = Math.hypot((x - u) * sx, (y - v) * L.s)
+          if (d < bestD && d <= 24) {
             bestD = d
-            best = z.region
+            best = g - 1
           }
         }
-        if (best) {
-          latest.current.onToggle(best)
-          return
-        }
       }
-      // ぴったり当たらなくても、指の大きさ分（約30px）の範囲で最も近い部位を選ぶ
-      let near: Region | null = null
-      let nearD = 30
-      for (const z of centers) {
-        if (!allowed(z.region)) continue
-        world.copy(z.c)
-        body.localToWorld(world)
-        world.project(camera)
-        const sx = ((world.x + 1) / 2) * r.width + r.left
-        const sy = ((1 - world.y) / 2) * r.height + r.top
-        const d = Math.hypot(sx - cx, sy - cy)
-        if (d < nearD) {
-          nearD = d
-          near = z.region
-        }
-      }
-      if (near) latest.current.onToggle(near)
+      if (best >= 0) latest.current.onToggle(ORDER[best])
     }
 
     const onDown = (e: PointerEvent) => {
@@ -387,15 +211,63 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
       const w = el.clientWidth
       const h = el.clientHeight
       if (!w || !h) return
-      renderer.setSize(w, h, false)
-      camera.aspect = w / h
-      // 狭い幅でも全身が入るようにカメラを引く
-      camera.position.z = Math.max(4.5, 4.5 * (0.62 / camera.aspect))
-      camera.updateProjectionMatrix()
+      dpr = Math.min(window.devicePixelRatio || 1, 2)
+      cw = w
+      ch = h
+      canvas.width = Math.round(w * dpr)
+      canvas.height = Math.round(h * dpr)
     }
     const ro = new ResizeObserver(resize)
     ro.observe(el)
     resize()
+
+    // 部位ごとの色を画素に塗る（色や選択が変わった部位だけ更新する）
+    const paintKey: string[][] = [[], []]
+    const paint = (vi: number, time: number) => {
+      const view = views![vi]
+      const { look: lk, selected: sel } = latest.current
+      const pulse = 0.5 + 0.5 * Math.sin(time * 0.006)
+      const out = view.img.data
+      let dirty = false
+      ORDER.forEach((region, i) => {
+        const l = lk[region]
+        const isSel = sel.includes(region)
+        const key = `${l.color}|${l.strength.toFixed(2)}|${isSel ? pulse.toFixed(2) : '-'}`
+        if (paintKey[vi][i] === key) return
+        paintKey[vi][i] = key
+        dirty = true
+        const [r, g, b] = hex(l.color)
+        // 回復途中の疲労が強いほど少し明るく、選択中は白へ脈打つ
+        const boost = 0.9 + 0.2 * l.strength
+        const mix = isSel ? 0.25 + 0.3 * pulse : 0
+        const R = Math.min(255, (r * boost) * (1 - mix) + 255 * mix)
+        const G = Math.min(255, (g * boost) * (1 - mix) + 255 * mix)
+        const B = Math.min(255, (b * boost) * (1 - mix) + 255 * mix)
+        for (const p of view.pix[i]) {
+          out[p * 4] = R
+          out[p * 4 + 1] = G
+          out[p * 4 + 2] = B
+          out[p * 4 + 3] = view.lum[p]
+        }
+      })
+      if (dirty) view.ctx.putImageData(view.img, 0, 0)
+    }
+
+    // 初回に、部位なしの画素（輪郭・内転筋など）を白で塗る
+    const initBase = (vi: number) => {
+      const view = views![vi]
+      const out = view.img.data
+      for (let p = 0; p < view.w * view.h; p++) {
+        const g = view.reg[p]
+        if (g === 0 || g > ORDER.length) {
+          out[p * 4] = 255
+          out[p * 4 + 1] = 255
+          out[p * 4 + 2] = 255
+          out[p * 4 + 3] = view.lum[p]
+        }
+      }
+    }
+    const ready = [false, false]
 
     let raf = 0
     let lastAngleReport = -1
@@ -427,36 +299,39 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
         vel *= Math.pow(0.94, f)
         if (Math.abs(vel) < 0.0004) vel = 0
       }
-      body.rotation.y = rotY
-      ticks.rotation.z = time * 0.0003
-      hud.rotation.z = -time * 0.0001
-
-      const { look: lk, selected: sel } = latest.current
-      const pulse = 0.5 + 0.5 * Math.sin(time * 0.006)
-      ORDER.forEach((region, i) => {
-        const l = lk[region]
-        uniforms.uCol.value[i].set(l.color)
-        uniforms.uAmt.value[i] = l.strength
-        uniforms.uSel.value[i] = sel.includes(region) ? 0.22 + 0.16 * pulse : 0
-      })
 
       const deg = Math.round((((rotY * 180) / Math.PI) % 360 + 360) % 360)
       if (deg !== lastAngleReport) {
         lastAngleReport = deg
         latest.current.onAngle?.(deg)
       }
-      renderer.render(scene, camera)
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      const L = layout()
+      if (!views || !L) return
+      const k = facing()
+      const vi = k >= 0 ? 0 : 1
+      if (!ready[vi]) {
+        initBase(vi)
+        ready[vi] = true
+      }
+      paint(vi, time)
+      const view = views[vi]
+      // 横幅を cos で縮める。真横を向く瞬間に、うっすら線だけ残す
+      const sx = Math.max(0.02, Math.abs(k))
+      ctx.setTransform(dpr * L.s * sx, 0, 0, dpr * L.s, dpr * L.ox, dpr * L.oy)
+      ctx.imageSmoothingQuality = 'high'
+      ctx.drawImage(view.off, -view.w / 2, 0)
     }
     raf = requestAnimationFrame(frame)
 
     return () => {
+      disposed = true
       cancelAnimationFrame(raf)
       ro.disconnect()
       io.disconnect()
       api.current = null
-      for (const d of disposables) d.dispose()
-      renderer.dispose()
-      renderer.forceContextLoss()
       canvas.remove()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
