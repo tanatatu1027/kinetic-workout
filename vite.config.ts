@@ -27,7 +27,8 @@ export default defineConfig({
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
-      workbox: { globPatterns: ['**/*.{js,css,html,svg,png,woff2}'] },
+      // 種目の写真（jpg）もオフラインで見られるよう事前キャッシュに含める
+      workbox: { globPatterns: ['**/*.{js,css,html,svg,png,jpg,woff2}'] },
     }),
   ],
 })

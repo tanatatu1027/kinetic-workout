@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MuscleBadge, useNow } from '../components/Common'
+import { ExerciseThumb, GuideSheet } from '../components/ExerciseGuide'
 import { ExercisePicker } from '../components/ExercisePicker'
-import { IconBack, IconBolt, IconCheck, IconClose, IconDown, IconMinus, IconPlus, IconUp } from '../components/Icons'
+import { IconBack, IconBolt, IconCheck, IconClose, IconDown, IconMinus, IconPlay, IconPlus, IconUp } from '../components/Icons'
 import { Keypad } from '../components/Keypad'
 import { fmtDuration, fmtLong } from '../lib/date'
 import { unlockAudio } from '../lib/sound'
@@ -9,6 +10,7 @@ import { bestBefore, doneSets, e1rm, fmtKg, fmtVolume, lastSets, suggestWeight, 
 import { adjustRest, blankSet, buildSets, clearRest, discardActive, findExercise, finishActive, getState, startRest, uid, updateActive, useStore } from '../lib/store'
 import { askChoice, askConfirm, toast } from '../lib/ui'
 import { isSeconds, stepFor } from '../data/exercises'
+import { hasGuide } from '../data/guides'
 import type { SetEntry, Workout, WorkoutExercise } from '../types'
 
 type Field = 'weight' | 'reps'
@@ -106,6 +108,7 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
   const [cursor, setCursor] = useState<Cursor | null>(null)
   const [buffer, setBuffer] = useState('')
   const [fresh, setFresh] = useState(true)
+  const [guideId, setGuideId] = useState<string | null>(null)
   const live = a.mode === 'live'
   useWakeLock(live)
 
@@ -405,8 +408,25 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
           return (
             <section className="ex-card" key={x.id}>
               <header className="ex-head">
-                <MuscleBadge muscle={ex.muscle} />
-                <h3>{ex.name}</h3>
+                {hasGuide(ex.id) ? (
+                  <button
+                    className="ex-demo-btn"
+                    onClick={() => {
+                      closeKeypad()
+                      setGuideId(ex.id)
+                    }}
+                    aria-label={`${ex.name}の動きを見る`}
+                  >
+                    <ExerciseThumb id={ex.id} />
+                    <span><IconPlay size={12} /> やり方</span>
+                  </button>
+                ) : (
+                  <MuscleBadge muscle={ex.muscle} />
+                )}
+                <h3>
+                  {ex.name}
+                  {hasGuide(ex.id) && <small><MuscleBadge muscle={ex.muscle} size="sm" /> 左の写真をタップで動きを確認</small>}
+                </h3>
                 <div className="ex-tools">
                   <button onClick={() => moveExercise(i, -1)} disabled={i === 0} aria-label="上へ移動"><IconUp size={18} /></button>
                   <button onClick={() => moveExercise(i, 1)} disabled={i === a.exercises.length - 1} aria-label="下へ移動"><IconDown size={18} /></button>
@@ -544,6 +564,7 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
       )}
 
       {picking && <ExercisePicker onClose={() => setPicking(false)} onPick={addExercises} />}
+      {guideId && <GuideSheet exerciseId={guideId} onClose={() => setGuideId(null)} />}
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react'
-import { BUILTIN_TEMPLATES, MUSCLES, PRESET_EXERCISES } from '../data/exercises'
+import { BUILTIN_TEMPLATES, MUSCLES, PRESET_EXERCISES, TEMPLATE_SEEDS, TPL_SEED } from '../data/exercises'
 import type { ActiveWorkout, AppData, BodyLog, Exercise, SetEntry, Template, TemplateItem, Workout } from '../types'
 import { fromKey, todayKey } from './date'
 import { lastSets, type TimeRef } from './stats'
@@ -22,6 +22,7 @@ const defaults = (): AppData => ({
   active: null,
   rest: null,
   lastExportAt: null,
+  tplSeed: TPL_SEED,
 })
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -121,13 +122,22 @@ export function parseData(raw: unknown): AppData | null {
 
   const base = defaults()
   const settings = isObj(raw.settings) ? raw.settings : {}
+  // 後から追加した内蔵テンプレートを、既存データへ一度だけ先頭に足す（利用者が消した後は復活させない）
+  const seed = raw.templates === undefined ? TPL_SEED : isNum(raw.tplSeed) ? raw.tplSeed : 1
+  const have = new Set((templates as Template[]).map((v) => v.id))
+  const added = Object.entries(TEMPLATE_SEEDS)
+    .filter(([ver]) => Number(ver) > seed)
+    .flatMap(([, ids]) => ids)
+    .filter((v) => !have.has(v))
+    .flatMap((v) => BUILTIN_TEMPLATES.filter((b) => b.id === v))
   const active = validWorkout(raw.active) ? (raw.active as ActiveWorkout) : null
   return {
     ...base,
     workouts: (raw.workouts as Workout[]).map((w) => ({ ...w, note: typeof w.note === 'string' ? w.note : '' })),
     bodyLogs: [...bodyByDate.values()].sort((a, b) => a.date.localeCompare(b.date)),
     customExercises: customExercises as Exercise[],
-    templates: templates as Template[],
+    templates: [...added, ...(templates as Template[])],
+    tplSeed: TPL_SEED,
     settings: {
       restSeconds: isNum(settings.restSeconds) && settings.restSeconds >= 1 && settings.restSeconds <= 3600 ? settings.restSeconds : base.settings.restSeconds,
       weightStep: isNum(settings.weightStep) && settings.weightStep >= 0.1 && settings.weightStep <= 100 ? settings.weightStep : base.settings.weightStep,

@@ -3,7 +3,8 @@ import { EQUIPMENT_LABEL, MUSCLES } from '../data/exercises'
 import { addCustomExercise, allExercises, useStore } from '../lib/store'
 import type { Equipment, Muscle } from '../types'
 import { MuscleBadge, Sheet } from './Common'
-import { IconCheck, IconPlus } from './Icons'
+import { ExerciseThumb, GuideSheet } from './ExerciseGuide'
+import { IconCheck, IconInfo, IconNext, IconPlus } from './Icons'
 
 /** 検索用: 大文字小文字・ひらがな/カタカナ・全角半角の揺れをそろえる */
 const norm = (t: string) =>
@@ -12,8 +13,11 @@ const norm = (t: string) =>
     .toLowerCase()
     .replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60))
 
-export function ExercisePicker({ onClose, onPick }: { onClose: () => void; onPick: (ids: string[]) => void }) {
+/** onPick を渡さない場合は「種目ガイド」として、動きと解説を見るだけの一覧になる */
+export function ExercisePicker({ onClose, onPick }: { onClose: () => void; onPick?: (ids: string[]) => void }) {
   const s = useStore()
+  const browse = !onPick
+  const [guideId, setGuideId] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [muscle, setMuscle] = useState<Muscle | 'all'>('all')
   const [picked, setPicked] = useState<string[]>([])
@@ -94,15 +98,19 @@ export function ExercisePicker({ onClose, onPick }: { onClose: () => void; onPic
   }
 
   return (
+    <>
     <Sheet
-      title="種目を選ぶ"
+      title={browse ? '種目ガイド' : '種目を選ぶ'}
       onClose={onClose}
       footer={
-        <button className="btn primary wide" disabled={picked.length === 0} onClick={() => onPick(picked)}>
-          {picked.length > 0 ? `${picked.length}種目を追加` : '種目をタップして選択'}
-        </button>
+        onPick ? (
+          <button className="btn primary wide" disabled={picked.length === 0} onClick={() => onPick(picked)}>
+            {picked.length > 0 ? `${picked.length}種目を追加` : '種目をタップして選択'}
+          </button>
+        ) : undefined
       }
     >
+      <p className="hint">{browse ? '種目をタップすると、動きとやり方を確認できます。' : '右の「i」で、動きとやり方を確認できます。'}</p>
       <input className="text" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="種目名で検索" aria-label="種目名で検索" />
       <div className="chips scroll">
         <button className={`chip ${muscle === 'all' ? 'on' : ''}`} onClick={() => setMuscle('all')}>
@@ -117,7 +125,7 @@ export function ExercisePicker({ onClose, onPick }: { onClose: () => void; onPic
       {list.length === 0 && (
         <p className="hint">
           「{q}」は見つかりません。
-          <button className="link" onClick={startCreate}>自作種目として追加</button>
+          {!browse && <button className="link" onClick={startCreate}>自作種目として追加</button>}
         </p>
       )}
       <ul className="pick-list">
@@ -125,21 +133,30 @@ export function ExercisePicker({ onClose, onPick }: { onClose: () => void; onPic
           const on = picked.includes(e.id)
           return (
             <li key={e.id}>
-              <button className={`pick-row ${on ? 'on' : ''}`} onClick={() => toggle(e.id)} aria-pressed={on}>
-                <MuscleBadge muscle={e.muscle} />
+              <button className={`pick-row ${on ? 'on' : ''}`} onClick={() => (browse ? setGuideId(e.id) : toggle(e.id))} aria-pressed={browse ? undefined : on}>
+                <ExerciseThumb id={e.id} />
                 <span className="pick-name">
                   {e.name}
-                  <small>{EQUIPMENT_LABEL[e.equipment]}</small>
+                  <small><MuscleBadge muscle={e.muscle} size="sm" /> {EQUIPMENT_LABEL[e.equipment]}</small>
                 </span>
-                <span className="pick-check">{on && <IconCheck size={18} />}</span>
+                {browse ? <IconNext size={18} /> : <span className="pick-check">{on && <IconCheck size={18} />}</span>}
               </button>
+              {!browse && (
+                <button className="icon-btn pick-info" onClick={() => setGuideId(e.id)} aria-label={`${e.name}の動きを見る`}>
+                  <IconInfo size={22} />
+                </button>
+              )}
             </li>
           )
         })}
       </ul>
-      <button className="btn wide" onClick={startCreate}>
-        <IconPlus size={18} /> 自作種目を追加
-      </button>
+      {!browse && (
+        <button className="btn wide" onClick={startCreate}>
+          <IconPlus size={18} /> 自作種目を追加
+        </button>
+      )}
     </Sheet>
+    {guideId && <GuideSheet exerciseId={guideId} onClose={() => setGuideId(null)} />}
+    </>
   )
 }

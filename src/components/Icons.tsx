@@ -24,3 +24,5 @@ export const IconMinus = (p: P) => <Svg {...p}><path d="M5 12h14" /></Svg>
 export const IconBackspace = (p: P) => <Svg {...p}><path d="M8.5 5H21v14H8.5L3 12z" /><path d="m12 9.5 5 5M17 9.5l-5 5" /></Svg>
 export const IconBolt = (p: P) => <Svg {...p}><path d="M13 3 5 13.5h6L10 21l8-11h-6z" /></Svg>
 export const IconBodyComp = (p: P) => <Svg {...p}><rect x="4" y="4" width="16" height="16" /><path d="M8 9.5a4 3 0 0 1 8 0M12 9.5l2.2-2.2" /><path d="M8 15h8" /></Svg>
+export const IconInfo = (p: P) => <Svg {...p}><circle cx="12" cy="12" r="8.5" /><path d="M12 11v5.5M12 7.5v.5" /></Svg>
+export const IconPlay = (p: P) => <Svg {...p}><path d="M8 5.5v13l10.5-6.5z" /></Svg>

@@ -102,10 +102,18 @@ const t = (id: string, name: string, items: [string, number][]): Template => ({
   items: items.map(([exerciseId, sets]) => ({ exerciseId, sets })),
 })
 
+/** 内蔵テンプレートの版。テンプレートを追加したら上げ、TEMPLATE_SEEDS に追加分を書く */
+export const TPL_SEED = 2
+
 export const BUILTIN_TEMPLATES: Template[] = [
+  t('tpl-machine-a', 'マシン全身 A（ジム初心者）', [['leg-press', 3], ['chest-press', 3], ['lat-pulldown', 3], ['shoulder-press', 2], ['ab-machine', 2]]),
+  t('tpl-machine-b', 'マシン全身 B（ジム初心者）', [['leg-ext', 3], ['leg-curl', 3], ['pec-fly', 3], ['seated-row', 3], ['pushdown', 2], ['crunch', 2]]),
   t('tpl-full-a', '全身 A（初心者向け）', [['squat', 3], ['bench', 3], ['barbell-row', 3], ['plank', 2]]),
   t('tpl-full-b', '全身 B（初心者向け）', [['deadlift', 3], ['ohp', 3], ['lat-pulldown', 3], ['crunch', 2]]),
   t('tpl-push', 'PUSH（胸・肩・三頭）', [['bench', 4], ['incline-db', 3], ['ohp', 3], ['lateral', 3], ['pushdown', 3]]),
   t('tpl-pull', 'PULL（背中・二頭）', [['deadlift', 3], ['lat-pulldown', 3], ['seated-row', 3], ['face-pull', 3], ['db-curl', 3]]),
   t('tpl-legs', 'LEGS（脚）', [['squat', 4], ['rdl', 3], ['leg-press', 3], ['leg-curl', 3], ['calf-raise', 3]]),
 ]
+
+/** 版2で追加した内蔵テンプレートのID */
+export const TEMPLATE_SEEDS: Record<number, string[]> = { 2: ['tpl-machine-a', 'tpl-machine-b'] }

@@ -7,7 +7,6 @@ export interface Point {
 }
 
 const W = 340
-const H = 190
 const PAD = { l: 40, r: 12, t: 14, b: 26 }
 
 function niceTicks(min: number, max: number) {
@@ -25,14 +24,19 @@ function niceTicks(min: number, max: number) {
   return ticks
 }
 
-/** 単一系列の推移グラフ。タップ/ドラッグで値を読める */
-export function TrendChart({ points, unit }: { points: Point[]; unit: string }) {
+/**
+ * 単一系列の推移グラフ。タップ/ドラッグで値を読める。
+ * compact: 複数並べる用の低いグラフ / goal: 目標値の横線（範囲から大きく外れていても見えるよう縦軸に含める）
+ */
+export function TrendChart({ points, unit, compact = false, goal = null }: { points: Point[]; unit: string; compact?: boolean; goal?: number | null }) {
   const ref = useRef<SVGSVGElement>(null)
   const [active, setActive] = useState<number | null>(null)
+  const H = compact ? 130 : 190
 
   if (points.length < 2) return <p className="empty">2回以上記録するとグラフが表示されます</p>
 
-  const ticks = niceTicks(Math.min(...points.map((p) => p.value)), Math.max(...points.map((p) => p.value)))
+  const values = [...points.map((p) => p.value), ...(goal === null ? [] : [goal])]
+  const ticks = niceTicks(Math.min(...values), Math.max(...values))
   const yMin = ticks[0]
   const yMax = ticks[ticks.length - 1]
   const x = (i: number) => PAD.l + (i * (W - PAD.l - PAD.r)) / (points.length - 1)
@@ -77,6 +81,15 @@ export function TrendChart({ points, unit }: { points: Point[]; unit: string }) 
         <text x={W - PAD.r} y={H - 7} textAnchor="end" className="axis">
           {fmtShort(points[points.length - 1].date).split('（')[0]}
         </text>
+        {goal !== null && (
+          <g>
+            <line x1={PAD.l} x2={W - PAD.r} y1={y(goal)} y2={y(goal)} className="goal-line" />
+            <text x={W - PAD.r - 2} y={y(goal) - 4} textAnchor="end" className="goal-text">
+              目標 {goal}
+              {unit}
+            </text>
+          </g>
+        )}
         <path d={path} className="line" />
         {showDots && points.map((p, i) => <circle key={i} cx={x(i)} cy={y(p.value)} r={3.2} className="dot" />)}
         {active !== null && cur && (

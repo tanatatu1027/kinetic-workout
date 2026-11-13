@@ -96,4 +96,6 @@ export interface AppData {
   active: ActiveWorkout | null
   rest: RestState | null
   lastExportAt: number | null
+  /** 内蔵テンプレートをどの版まで配布済みか（後から追加した内蔵テンプレートを既存データへ一度だけ足すため） */
+  tplSeed: number
 }
