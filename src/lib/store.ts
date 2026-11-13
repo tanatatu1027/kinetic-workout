@@ -259,6 +259,8 @@ if (typeof window !== 'undefined') {
   })
 }
 
+export const subscribeStore = (l: () => void) => subscribe(l)
+
 const subscribe = (l: () => void) => {
   listeners.add(l)
   return () => {

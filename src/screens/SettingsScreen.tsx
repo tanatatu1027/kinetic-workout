@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { CloudBackup } from '../components/CloudBackup'
 import { Panel, Sheet } from '../components/Common'
 import { EQUIPMENT_LABEL, MUSCLES } from '../data/exercises'
 import { exportCsv, exportJson, readBackup } from '../lib/backup'
@@ -182,6 +183,8 @@ export function SettingsScreen() {
           <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => void importFile(e.target.files?.[0])} />
         </div>
       </Panel>
+
+      <CloudBackup />
 
       <Panel label="DANGER ZONE">
         <button className="btn wide danger-text" onClick={reset}>すべてのデータを消去</button>
