@@ -1,10 +1,18 @@
 import { useMemo, useState } from 'react'
 import { MuscleBadge, Stat } from '../components/Common'
-import { fmtLong, fmtMinutes } from '../lib/date'
-import { doneSets, fmtKg, fmtVolume, prIndex, workoutSetCount, workoutVolume } from '../lib/stats'
+import { isSeconds } from '../data/exercises'
+import { fmtLong, fmtMinutes, fmtShort } from '../lib/date'
+import { averageRir, compareWithPrevious, doneSets, fmtKg, fmtVolume, prIndex, workoutSetCount, workoutVolume } from '../lib/stats'
 import { findExercise, saveTemplate, useStore } from '../lib/store'
 import { toast } from '../lib/ui'
 import type { Workout } from '../types'
+import '../workout-extra.css'
+
+/** 増減の表示。0 は「前回と同じ」 */
+function Diff({ n, unit = '' }: { n: number; unit?: string }) {
+  if (n === 0) return <b className="cmp-same">前回と同じ</b>
+  return <b className={n > 0 ? 'cmp-up' : 'cmp-down'}>{n > 0 ? '+' : '−'}{fmtKg(Math.abs(n))}{unit}</b>
+}
 
 export function SummaryScreen({ workout, onClose, onShowDay }: { workout: Workout; onClose: () => void; onShowDay: () => void }) {
   const s = useStore()
@@ -20,6 +28,9 @@ export function SummaryScreen({ workout, onClose, onShowDay }: { workout: Workou
     )
   }, [s.workouts, workout])
 
+  const cmp = useMemo(() => compareWithPrevious(s.workouts, workout), [s.workouts, workout])
+
+  const rir = useMemo(() => averageRir(workout), [workout])
   const duration = workout.endedAt - workout.startedAt
 
   const save = () => {
@@ -40,6 +51,7 @@ export function SummaryScreen({ workout, onClose, onShowDay }: { workout: Workou
           {duration > 0 && <Stat label="時間" value={fmtMinutes(duration)} />}
           <Stat label="セット" value={workoutSetCount(workout)} />
           <Stat label="総量" value={fmtVolume(workoutVolume(workout))} unit="kg" />
+          {rir && <Stat label="平均RIR" value={(Math.round(rir.avg * 10) / 10).toFixed(1)} unit="回" />}
         </div>
 
         {prs.length > 0 && (
@@ -52,7 +64,31 @@ export function SummaryScreen({ workout, onClose, onShowDay }: { workout: Workou
                   <li key={p.id}>
                     <MuscleBadge muscle={ex.muscle} size="sm" />
                     <span>{ex.name}</span>
-                    <b className="num">{fmtKg(p.weight)}kg×{p.reps}</b>
+                    <b className="num">{p.weight > 0 ? `${fmtKg(p.weight)}kg×${p.reps}` : `${p.reps}${isSeconds(p.exerciseId) ? '秒' : '回'}`}</b>
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
+        )}
+
+        {cmp && (
+          <section className="summary-cmp">
+            <h2 className="hud-label">VS 前回（{fmtShort(cmp.prev.date)}・{cmp.sameTitle ? '同じメニュー' : '近い内容'}）</h2>
+            <ul className="cmp-list">
+              <li><span>総量</span><Diff n={cmp.volume} unit="kg" /></li>
+              <li><span>セット数</span><Diff n={cmp.sets} unit="セット" /></li>
+              {cmp.exercises.map((d) => {
+                const ex = findExercise(s, d.exerciseId)
+                const unit = d.kind === 'weight' ? 'kg' : isSeconds(d.exerciseId) ? '秒' : '回'
+                return (
+                  <li key={d.exerciseId}>
+                    <span>
+                      {ex.name}
+                      <br />
+                      <small className="cmp-sub">{d.kind === 'weight' ? '最高重量' : isSeconds(d.exerciseId) ? '最長' : '最大回数'} {fmtKg(d.prev)}{unit} → {fmtKg(d.cur)}{unit}{d.repsAtTop && d.repsAtTop.prev !== d.repsAtTop.cur ? `（${fmtKg(d.cur)}kgの最大回数 ${d.repsAtTop.prev}→${d.repsAtTop.cur}回）` : ''}</small>
+                    </span>
+                    <Diff n={d.diff} unit={unit} />
                   </li>
                 )
               })}

@@ -3,9 +3,11 @@ import { CloudBackup } from '../components/CloudBackup'
 import { Panel, Sheet } from '../components/Common'
 import { EQUIPMENT_LABEL, MUSCLES } from '../data/exercises'
 import { exportCsv, exportJson, readBackup } from '../lib/backup'
-import { corruptKeys, deleteCustomExercise, readCorrupt, replaceAll, resetAll, updateCustomExercise, updateSettings, useStore } from '../lib/store'
+import { activeCustomExercises, corruptKeys, deleteCustomExercise, readCorrupt, replaceAll, resetAll, setExerciseRest, setWeeklyGoal, updateCustomExercise, updateSettings, useStore } from '../lib/store'
 import type { Equipment, Muscle } from '../types'
 import { askConfirm, toast } from '../lib/ui'
+import { findExercise } from '../lib/store'
+import '../workout-extra.css'
 
 const REST = [30, 45, 60, 90, 120, 180]
 const fmtRest = (r: number) => (r < 60 ? `${r}秒` : r % 60 === 0 ? `${r / 60}分` : `${Math.floor(r / 60)}分${r % 60}秒`)
@@ -17,13 +19,16 @@ export function SettingsScreen() {
   const [persisted, setPersisted] = useState<boolean | null>(null)
   const [editId, setEditId] = useState<string | null>(null)
   const [corrupt, setCorrupt] = useState<string[]>(() => corruptKeys())
-  const editing = s.customExercises.find((e) => e.id === editId)
+  const goal = s.settings.weeklyGoal
+  const restList = Object.entries(s.settings.restByExercise ?? {})
+  const customList = activeCustomExercises(s)
+  const editing = customList.find((e) => e.id === editId)
   const [name, setName] = useState('')
   const [muscle, setMuscle] = useState<Muscle>('chest')
   const [eq, setEq] = useState<Equipment>('machine')
 
   const openEdit = (id: string) => {
-    const e = s.customExercises.find((v) => v.id === id)
+    const e = customList.find((v) => v.id === id)
     if (!e) return
     setName(e.name)
     setMuscle(e.muscle)
@@ -82,7 +87,7 @@ export function SettingsScreen() {
       danger: true,
     })
     if (ok) {
-      if (replaceAll(data)) toast('読み込みました')
+      if (replaceAll(data)) toast(res.dropped > 0 ? `読み込みました（不正なデータ${res.dropped}件を除外。元の内容は端末内に退避済み）` : '読み込みました')
       else toast('保存できなかったため、元のデータに戻しました。容量を確認してください')
     }
   }
@@ -131,6 +136,35 @@ export function SettingsScreen() {
         </div>
       </Panel>
 
+      <Panel label="GOAL / REST">
+        <div className="field">
+          <span>週の目標回数</span>
+          <div className="goal-row">
+            <button className="goal-mini" aria-label="目標を1回減らす" disabled={goal === undefined} onClick={() => setWeeklyGoal(goal! - 1)}>−</button>
+            <b className="goal-text num">{goal === undefined ? '未設定' : `週${goal}回`}</b>
+            <button className="goal-mini" aria-label="目標を1回増やす" disabled={goal !== undefined && goal >= 14} onClick={() => setWeeklyGoal((goal ?? 2) + 1)}>＋</button>
+            {goal !== undefined && <button className="btn" onClick={() => setWeeklyGoal(0)}>解除</button>}
+          </div>
+        </div>
+        <div className="field">
+          <span>種目ごとの休憩時間（共通は {fmtRest(s.settings.restSeconds)}）</span>
+          {restList.length === 0 ? (
+            <p className="hint">個別に変えた種目はありません。ワークアウト中の種目カード「休憩」ボタンで種目ごとに変えられます。</p>
+          ) : (
+            <ul className="rest-overrides">
+              {restList.map(([id, sec]) => (
+                <li key={id}>
+                  <span>{findExercise(s, id).name}</span>
+                  <b className="num">{fmtRest(sec)}</b>
+                  <button className="btn" onClick={() => setExerciseRest(id, null)}>戻す</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <p className="hint">バー重量とプレート構成は、ワークアウト画面の「RM・プレート計算」で設定します（プレート構成は端末に保存、バー重量は開くたびに20kgから始まります）。</p>
+      </Panel>
+
       <Panel label="DISPLAY">
         <button className="toggle-row" role="switch" aria-checked={s.settings.highContrast} onClick={() => updateSettings({ highContrast: !s.settings.highContrast })}>
           <span>
@@ -141,10 +175,10 @@ export function SettingsScreen() {
         </button>
       </Panel>
 
-      {s.customExercises.length > 0 && (
+      {customList.length > 0 && (
         <Panel label="MY EXERCISES">
           <ul className="my-ex">
-            {s.customExercises.map((e) => (
+            {customList.map((e) => (
               <li key={e.id}>
                 <button onClick={() => openEdit(e.id)}>
                   <span>{e.name}</span>
@@ -172,7 +206,7 @@ export function SettingsScreen() {
             )}
           </dd>
         </dl>
-        <p className="hint">データはこのiPhone内にのみ保存されます。機種変更やアプリの削除に備えて、定期的にバックアップを書き出してください。</p>
+        <p className="hint">記録はまずこのiPhone内に保存され、下のクラウドバックアップを使うと変更のたびに自動でクラウドにも控えが保存されます。アプリの削除や機種変更に備えて、JSONの書き出しも定期的に行ってください。</p>
         <div className="stack">
           <button className="btn wide" onClick={() => void exportJson()}>バックアップを書き出す（JSON）</button>
           <button className="btn wide" onClick={() => fileRef.current?.click()}>バックアップを読み込む</button>

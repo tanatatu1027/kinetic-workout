@@ -1,13 +1,30 @@
-import { useEffect, useMemo, useState } from 'react'
-import { MuscleBadge, useNow } from '../components/Common'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { MuscleBadge, Sheet, useNow } from '../components/Common'
 import { ExerciseThumb, GuideSheet } from '../components/ExerciseGuide'
 import { ExercisePicker } from '../components/ExercisePicker'
 import { IconBack, IconBolt, IconCheck, IconClose, IconDown, IconMinus, IconPlay, IconPlus, IconUp } from '../components/Icons'
 import { Keypad } from '../components/Keypad'
-import { fmtDuration, fmtLong } from '../lib/date'
+import { RmSheet } from '../components/RmSheet'
+import { fmtDuration, fmtLong, fmtShort } from '../lib/date'
 import { unlockAudio } from '../lib/sound'
-import { bestBefore, doneSets, e1rm, fmtKg, fmtVolume, lastSets, suggestWeight, type TimeRef } from '../lib/stats'
-import { adjustRest, blankSet, buildSets, clearRest, discardActive, findExercise, finishActive, getState, startRest, uid, updateActive, useStore } from '../lib/store'
+import {
+  bestScores,
+  doneSets,
+  fmtKg,
+  fmtVolume,
+  isLowerBody,
+  progressionFor,
+  recentSessions,
+  repRangeFor,
+  setScore,
+  suggestedRest,
+  type Bests,
+  type Progression,
+  type Session,
+  type TimeRef,
+} from '../lib/stats'
+import { adjustRest, blankSet, buildSets, clearRest, discardActive, findExercise, finishActive, getState, setExerciseNote, setExerciseRest, startRest, uid, updateActive, useStore } from '../lib/store'
+import '../workout-extra.css'
 import { askChoice, askConfirm, toast } from '../lib/ui'
 import { isSeconds, stepFor } from '../data/exercises'
 import { hasGuide } from '../data/guides'
@@ -71,6 +88,101 @@ function useWakeLock(enabled: boolean) {
   }, [enabled])
 }
 
+const fmtRest = (sec: number) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
+
+/** 画面のセット番号と同じ体系（ウォームアップは W、本番は 1 からの連番）で数える */
+const workingNo = (sets: SetEntry[], idx: number) => sets.slice(0, idx + 1).filter((v) => !v.warmup).length
+const setName = (sets: SetEntry[], idx: number) => (sets[idx]?.warmup ? 'ウォームアップ' : `${workingNo(sets, idx)}セット目`)
+
+/** 種目ごとの休憩時間。15秒刻み、30秒〜5分 */
+function RestSheet({ exerciseId, onClose }: { exerciseId: string; onClose: () => void }) {
+  const s = useStore()
+  const own = s.settings.restByExercise?.[exerciseId]
+  const common = s.settings.restSeconds
+  const value = own ?? common
+  const hint = suggestedRest(exerciseId)
+  const set = (v: number) => setExerciseRest(exerciseId, Math.min(300, Math.max(30, v)))
+  return (
+    <Sheet title={`${findExercise(s, exerciseId).name}の休憩`} onClose={onClose}>
+      <div className="stepper rest-stepper">
+        <button className="icon-btn" aria-label="15秒減らす" disabled={value <= 30} onClick={() => set(value - 15)}><IconMinus size={18} /></button>
+        <b className="num">{fmtRest(value)}</b>
+        <button className="icon-btn" aria-label="15秒増やす" disabled={value >= 300} onClick={() => set(value + 15)}><IconPlus size={18} /></button>
+      </div>
+      <p className="hint">{own === undefined ? `今は共通設定（${fmtRest(common)}）です。` : 'この種目だけ変えています。'}</p>
+      <button className="btn wide" disabled={own === hint} onClick={() => setExerciseRest(exerciseId, hint)}>
+        目安にする（{fmtRest(hint)}）
+      </button>
+      <p className="hint">大きい種目（ベンチプレス・スクワットなど）は2〜3分、単関節の種目は90秒が目安です。</p>
+      <button className="btn wide" disabled={own === undefined} onClick={() => setExerciseRest(exerciseId, null)}>
+        共通に戻す（{fmtRest(common)}）
+      </button>
+    </Sheet>
+  )
+}
+
+/** セット番号。タップでメニュー、長押し(0.5秒)でウォームアップ切替。誤操作を避けるため1タップでは切り替えない */
+function SetNoButton({ label, warm, aria, onTap, onLong }: { label: string; warm: boolean; aria: string; onTap: () => void; onLong: () => void }) {
+  const timer = useRef<number | undefined>(undefined)
+  const fired = useRef(false)
+  const [pressing, setPressing] = useState(false)
+  const cancel = () => {
+    window.clearTimeout(timer.current)
+    setPressing(false)
+  }
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  return (
+    <button
+      className={`set-no ${warm ? 'warm' : ''} ${pressing ? 'pressing' : ''}`}
+      aria-label={aria}
+      onPointerDown={() => {
+        fired.current = false
+        setPressing(true)
+        timer.current = window.setTimeout(() => {
+          fired.current = true
+          setPressing(false)
+          onLong()
+        }, 500)
+      }}
+      onPointerUp={cancel}
+      onPointerLeave={cancel}
+      onPointerCancel={cancel}
+      onContextMenu={(e) => e.preventDefault()}
+      onClick={() => {
+        if (fired.current) {
+          fired.current = false
+          return
+        }
+        onTap()
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
+const RIR_CHOICES: { v: 0 | 1 | 2 | 3; label: string }[] = [
+  { v: 0, label: '限界' },
+  { v: 1, label: 'あと1〜2回' },
+  { v: 3, label: 'あと3回以上' },
+]
+
+/** 保存値 → 表示名（UIの選択肢は 0 / 1 / 3。2 は取り込んだデータ用） */
+export const rirLabel = (v: 0 | 1 | 2 | 3) => (v === 0 ? '限界' : v === 3 ? 'あと3回以上' : 'あと1〜2回')
+
+/** ダブルプログレッションの提案を、未完了の本番セットへ当てはめた結果 */
+function planSets(sets: SetEntry[], p: Progression): SetEntry[] {
+  let w = 0
+  return sets.map((st) => {
+    if (st.done || st.warmup) return st
+    const j = w++
+    if (p.kind === 'raise') return { ...st, weight: p.weight, reps: p.startReps }
+    if (p.kind === 'deload') return { ...st, weight: p.weight }
+    if (p.kind === 'hold') return { ...st, weight: p.weight, reps: p.targets[j] ?? p.targets[p.targets.length - 1] }
+    return { ...st, weight: p.weight > 0 ? p.weight : st.weight, reps: p.targets[j] ?? p.targets[p.targets.length - 1] }
+  })
+}
+
 function RestDock({ endsAt, duration }: { endsAt: number; duration: number }) {
   const now = useNow(250)
   const left = Math.max(0, endsAt - now)
@@ -109,17 +221,28 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
   const [buffer, setBuffer] = useState('')
   const [fresh, setFresh] = useState(true)
   const [guideId, setGuideId] = useState<string | null>(null)
+  const [restId, setRestId] = useState<string | null>(null)
+  const [setMenu, setSetMenu] = useState<{ xId: string; sId: string } | null>(null)
+  const [calc, setCalc] = useState<{ tab: 'rm' | 'plate'; weight?: number } | null>(null)
+  /** 完了直後に「あと何回できたか」を尋ねるセットのID（数秒で消える） */
+  const [rirFor, setRirFor] = useState<string | null>(null)
+  useEffect(() => {
+    if (!rirFor) return
+    const t = window.setTimeout(() => setRirFor(null), 8000)
+    return () => window.clearTimeout(t)
+  }, [rirFor])
+  const [noteOpen, setNoteOpen] = useState<string[]>([])
   const live = a.mode === 'live'
   useWakeLock(live)
 
   const ref: TimeRef = useMemo(() => ({ date: a.date, startedAt: a.startedAt, id: a.id }), [a.date, a.startedAt, a.id])
   const exerciseKey = a.exercises.map((x) => x.exerciseId).join(',')
 
-  // 種目ごとの前回記録と、これまでの最高推定1RM
+  // 種目ごとの直近2回の記録と、これまでの自己ベスト（重量あり=推定1RM / 自重・秒数=回数）
   const history = useMemo(() => {
-    const map = new Map<string, { last: ReturnType<typeof lastSets>; best: number | null }>()
+    const map = new Map<string, { sessions: Session[]; bests: Bests }>()
     for (const id of exerciseKey ? exerciseKey.split(',') : []) {
-      map.set(id, { last: lastSets(s.workouts, id, ref), best: bestBefore(s.workouts, id, ref) })
+      map.set(id, { sessions: recentSessions(s.workouts, id, ref, 2), bests: bestScores(s.workouts, id, ref) })
     }
     return map
   }, [exerciseKey, s.workouts, ref])
@@ -209,27 +332,44 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
     unlockAudio()
     leaveCell()
     if (st.done) {
-      patchSet(x.id, st.id, (v) => ({ ...v, done: false }))
+      patchSet(x.id, st.id, (v) => {
+        const { rir: _rir, ...rest } = v
+        return { ...rest, done: false }
+      })
+      setRirFor((c) => (c === st.id ? null : c))
       return
     }
     if (st.weight === null && !isBodyweight(x.exerciseId)) return openCell({ xId: x.id, sId: st.id, field: 'weight' })
-    if (!st.reps) return openCell({ xId: x.id, sId: st.id, field: 'reps' })
+    if (!st.reps) {
+      if (cursor?.sId === st.id && cursor.field === 'reps') toast(isSeconds(x.exerciseId) ? '秒数を入力してください' : '回数を入力してください')
+      return openCell({ xId: x.id, sId: st.id, field: 'reps' })
+    }
     patchSet(x.id, st.id, (v) => ({ ...v, done: true }))
+    setRirFor(st.warmup ? null : st.id)
     setCursor(null)
-    // 自己ベスト更新（e1RM）を、その場でトースト+振動で知らせる
-    if (!st.warmup && st.weight && st.reps) {
+    // 自己ベスト更新を、その場でトースト+振動で知らせる（重量あり=推定1RM、自重・秒数=回数）
+    const sc = !st.warmup ? setScore(st) : null
+    if (sc) {
       const cur = getState()
-      const prior = bestBefore(cur.workouts, x.exerciseId, ref)
-      const before = x.sets.slice(0, x.sets.findIndex((v) => v.id === st.id)).filter((v) => v.done && !v.warmup && v.weight && v.reps)
-      const base = Math.max(prior ?? 0, ...before.map((v) => e1rm(v.weight!, v.reps!)))
-      if (prior !== null && e1rm(st.weight, st.reps) > base + 1e-6) {
-        toast(`自己ベスト更新！ ${findExercise(cur, x.exerciseId).name} ${fmtKg(st.weight)}kg×${st.reps}`)
+      const prior = bestScores(cur.workouts, x.exerciseId, ref)[sc.kind]
+      const before = x.sets
+        .slice(0, x.sets.findIndex((v) => v.id === st.id))
+        .filter((v) => v.done && !v.warmup)
+        .map(setScore)
+        .filter((c) => c?.kind === sc.kind)
+      const base = Math.max(prior ?? 0, ...before.map((c) => c!.v))
+      if (prior !== null && sc.v > base + 1e-6) {
+        const label = st.weight ? `${fmtKg(st.weight)}kg×${st.reps}` : `${st.reps}${isSeconds(x.exerciseId) ? '秒' : '回'}`
+        toast(`自己ベスト更新！ ${findExercise(cur, x.exerciseId).name} ${label}`)
         navigator.vibrate?.([60, 40, 60])
       }
     }
     const nextId = nextSetId(st.id)
     if (nextId) {
-      if (live && !st.warmup && getState().settings.autoRest) startRest(getState().settings.restSeconds)
+      if (live && !st.warmup && getState().settings.autoRest) {
+        const cfg = getState().settings
+        startRest(cfg.restByExercise?.[x.exerciseId] ?? cfg.restSeconds)
+      }
       window.setTimeout(() => {
         document.querySelector(`[data-set="${CSS.escape(nextId)}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
       }, 120)
@@ -267,6 +407,32 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
     toast('セットを削除しました', {
       label: '元に戻す',
       run: () => patchExercise(x.id, (v) => (v.sets.some((q) => q.id === removed.id) ? v : { ...v, sets: [...v.sets, removed] })),
+    })
+  }
+
+  const toggleWarmup = (x: WorkoutExercise, st: SetEntry) => {
+    const was = !!st.warmup
+    patchSet(x.id, st.id, (v) => ({ ...v, warmup: !was }))
+    toast(was ? '本番セットに戻しました' : 'ウォームアップにしました（記録・PRの集計対象外）', {
+      label: '元に戻す',
+      run: () => patchSet(x.id, st.id, (v) => ({ ...v, warmup: was })),
+    })
+  }
+
+  const deleteSet = (x: WorkoutExercise, st: SetEntry) => {
+    const idx = x.sets.findIndex((v) => v.id === st.id)
+    if (idx < 0) return
+    if (cursor?.sId === st.id) setCursor(null)
+    patchExercise(x.id, (v) => ({ ...v, sets: v.sets.filter((q) => q.id !== st.id) }))
+    toast(`${setName(x.sets, idx)}を削除しました`, {
+      label: '元に戻す',
+      run: () =>
+        patchExercise(x.id, (v) => {
+          if (v.sets.some((q) => q.id === st.id)) return v
+          const list = [...v.sets]
+          list.splice(Math.min(idx, list.length), 0, st)
+          return { ...v, sets: list }
+        }),
     })
   }
 
@@ -400,17 +566,33 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
         {a.exercises.map((x, i) => {
           const ex = findExercise(s, x.exerciseId)
           const h = history.get(x.exerciseId)
-          const last = h?.last?.sets
-          const suggestion = live || a.mode === 'backfill' ? suggestWeight(last, stepFor(ex.equipment, s.settings.weightStep)) : null
-          const unit = isSeconds(ex.id) ? '秒' : '回'
-          const canSuggest = suggestion !== null && x.sets.some((st) => !st.done && !st.warmup && (st.weight ?? 0) < suggestion)
-          let best = h?.best ?? null
+          const sessions = h?.sessions ?? []
+          const lastSession = sessions[0]
+          const last = lastSession?.sets
+          const secs = isSeconds(ex.id)
+          const prog =
+            live || a.mode === 'backfill'
+              ? progressionFor(sessions.map((v) => v.sets), {
+                  range: repRangeFor(ex.id, ex.equipment),
+                  step: stepFor(ex.equipment, s.settings.weightStep),
+                  lower: isLowerBody(ex.id, ex.muscle),
+                  repStep: secs ? 5 : 1,
+                })
+              : null
+          const range = repRangeFor(ex.id, ex.equipment)
+          const planned = prog ? planSets(x.sets, prog) : null
+          const canApply = !!planned && planned.some((st, n) => st.weight !== x.sets[n].weight || st.reps !== x.sets[n].reps)
+          const unit = secs ? '秒' : '回'
+          const bests: Bests = { ...(h?.bests ?? { w: null, r: null }) }
+          const restSec = s.settings.restByExercise?.[ex.id] ?? s.settings.restSeconds
+          const noteShown = !!x.note || noteOpen.includes(x.id)
           return (
             <section className="ex-card" key={x.id}>
               <header className="ex-head">
                 {hasGuide(ex.id) ? (
                   <button
                     className="ex-demo-btn"
+                    title="タップで動きを確認"
                     onClick={() => {
                       closeKeypad()
                       setGuideId(ex.id)
@@ -425,25 +607,81 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
                 )}
                 <h3>
                   {ex.name}
-                  {hasGuide(ex.id) && <small><MuscleBadge muscle={ex.muscle} size="sm" /> 左の写真をタップで動きを確認</small>}
+                  {hasGuide(ex.id) && <small><MuscleBadge muscle={ex.muscle} size="sm" /></small>}
                 </h3>
                 <div className="ex-tools">
-                  <button onClick={() => moveExercise(i, -1)} disabled={i === 0} aria-label="上へ移動"><IconUp size={18} /></button>
-                  <button onClick={() => moveExercise(i, 1)} disabled={i === a.exercises.length - 1} aria-label="下へ移動"><IconDown size={18} /></button>
-                  <button onClick={() => removeExercise(x)} aria-label={`${ex.name}を外す`}><IconClose size={18} /></button>
+                  <button onClick={() => moveExercise(i, -1)} disabled={i === 0} aria-label="上へ移動"><IconUp size={20} /></button>
+                  <button onClick={() => moveExercise(i, 1)} disabled={i === a.exercises.length - 1} aria-label="下へ移動"><IconDown size={20} /></button>
+                  <button className="ex-remove" onClick={() => removeExercise(x)} aria-label={`${ex.name}を外す`}><IconClose size={20} /></button>
                 </div>
               </header>
 
-              {canSuggest && (
+              <div className="ex-meta">
+                {lastSession && <span className="ex-last">前回 {fmtShort(lastSession.date)}</span>}
+                <button className="meta-chip" onClick={() => { closeKeypad(); setRestId(ex.id) }} aria-label={`${ex.name}の休憩時間を変える`}>
+                  休憩 {fmtRest(restSec)}{s.settings.restByExercise?.[ex.id] !== undefined && ' ●'}
+                </button>
                 <button
-                  className="suggest"
+                  className={`meta-chip ${x.note ? 'on' : ''}`}
+                  aria-expanded={noteShown}
+                  onClick={() => setNoteOpen((l) => (l.includes(x.id) ? l.filter((v) => v !== x.id) : [...l, x.id]))}
+                >
+                  メモ
+                </button>
+                {ex.equipment === 'barbell' && (
+                  <button
+                    className="meta-chip"
+                    onClick={() => {
+                      closeKeypad()
+                      const target = x.sets.find((st) => !st.done && !st.warmup && st.weight)?.weight ?? last?.[0]?.weight ?? undefined
+                      setCalc({ tab: 'plate', weight: target })
+                    }}
+                  >
+                    プレート
+                  </button>
+                )}
+              </div>
+              {lastSession?.note && <p className="ex-prevnote">前回のメモ: {lastSession.note}</p>}
+              {noteShown && (
+                <textarea
+                  className="text ex-note"
+                  rows={2}
+                  maxLength={500}
+                  value={x.note ?? ''}
+                  aria-label={`${ex.name}のメモ`}
+                  placeholder="フォームの注意、シート位置など"
+                  onFocus={closeKeypad}
+                  onChange={(e) => setExerciseNote(x.id, e.target.value)}
+                />
+              )}
+
+              {prog && (
+                <button
+                  className={`suggest ${prog.kind === 'deload' ? 'warn' : ''}`}
+                  disabled={!canApply}
                   onClick={() => {
                     closeKeypad()
-                    patchExercise(x.id, (v) => ({ ...v, sets: v.sets.map((st) => (st.done || st.warmup || (st.weight ?? 0) >= suggestion! ? st : { ...st, weight: suggestion })) }))
+                    patchExercise(x.id, (v) => ({ ...v, sets: planSets(v.sets, prog) }))
                   }}
                 >
                   <IconBolt size={16} />
-                  <span>前回は全セット10回以上。<b>{fmtKg(suggestion!)}kg</b> に上げる</span>
+                  <span>
+                    {prog.kind === 'raise' && (
+                      <>前回は全セット{range.max}回に到達{prog.big && '（余力あり）'}。<b>{fmtKg(prog.weight)}kg</b> に上げて{prog.startReps}回から（目安 {range.min}〜{range.max}回）</>
+                    )}
+                    {prog.kind === 'hold' && (
+                      <>限界（あと0回）が続いています。<b>{fmtKg(prog.weight)}kg</b> のまま据え置き（{prog.targets.join('/')}{unit}を目標に）</>
+                    )}
+                    {prog.kind === 'deload' && (
+                      <>下限（{range.min}回）を2回続けて下回りました。<b>{fmtKg(prog.weight)}kg</b> に下げて立て直し</>
+                    )}
+                    {prog.kind === 'reps' && prog.weight > 0 && (
+                      <>同じ <b>{fmtKg(prog.weight)}kg</b> で回数を増やす（目標: 各セット+1回 → {prog.targets.join('/')}{unit}）</>
+                    )}
+                    {prog.kind === 'reps' && prog.weight === 0 && (
+                      <>{unit}を伸ばす（目標: 各セット+{secs ? 5 : 1}{unit} → {prog.targets.join('/')}{unit}）</>
+                    )}
+                  </span>
                 </button>
               )}
 
@@ -456,18 +694,20 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
               </div>
 
               {x.sets.map((st, n) => {
-                const workingNo = x.sets.slice(0, n + 1).filter((v) => !v.warmup).length
+                const no = workingNo(x.sets, n)
+                const name = setName(x.sets, n)
                 // 前回は本番セットのみ。ウォームアップ行を数えるとずれる
-                const prev = st.warmup ? undefined : last?.[workingNo - 1]
+                const prev = st.warmup ? undefined : last?.[no - 1]
                 const editing = (f: Field) => cursor?.sId === st.id && cursor.field === f
                 let pr = false
-                if (st.done && !st.warmup && st.weight && st.reps) {
-                  const v = e1rm(st.weight, st.reps)
+                const sc = st.done && !st.warmup ? setScore(st) : null
+                if (sc) {
                   // 初めての種目は最初のセットを基準にし、以降の更新をPRとする（サマリーと同じ判定）
-                  if (best === null) best = v
-                  else if (v > best + 1e-6) {
+                  const cur = bests[sc.kind]
+                  if (cur === null) bests[sc.kind] = sc.v
+                  else if (sc.v > cur + 1e-6) {
                     pr = true
-                    best = v
+                    bests[sc.kind] = sc.v
                   }
                 }
                 const shown = (f: Field) => {
@@ -477,17 +717,18 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
                   return String(v)
                 }
                 return (
-                  <div className={`set-grid set-row ${st.done ? 'done' : ''} ${pr ? 'pr' : ''}`} key={st.id} data-set={st.id}>
-                    <button
-                      className={`set-no ${st.warmup ? 'warm' : ''}`}
-                      onClick={() => {
-                        patchSet(x.id, st.id, (v) => ({ ...v, warmup: !v.warmup }))
-                        toast(st.warmup ? '本番セットに戻しました' : 'ウォームアップにしました（記録・PRの集計対象外）')
+                  <Fragment key={st.id}>
+                  <div className={`set-grid set-row ${st.done ? 'done' : ''} ${pr ? 'pr' : ''}`} data-set={st.id}>
+                    <SetNoButton
+                      label={st.warmup ? 'W' : String(no)}
+                      warm={!!st.warmup}
+                      aria={`${name}のメニュー（長押しでウォームアップ切替）`}
+                      onTap={() => {
+                        closeKeypad()
+                        setSetMenu({ xId: x.id, sId: st.id })
                       }}
-                      aria-label={st.warmup ? 'ウォームアップを解除' : 'ウォームアップにする'}
-                    >
-                      {st.warmup ? 'W' : workingNo}
-                    </button>
+                      onLong={() => toggleWarmup(x, st)}
+                    />
                     <button
                       className="set-prev"
                       disabled={!prev || st.done}
@@ -500,16 +741,39 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
                     >
                       {prev ? (isSeconds(ex.id) ? `${prev.reps}秒` : `${prev.weight ? fmtKg(prev.weight) : '自重'}×${prev.reps}`) : '—'}
                     </button>
-                    <button className={`cell ${editing('weight') ? 'editing' : ''} ${editing('weight') && fresh ? 'fresh' : ''}`} onClick={() => openCell({ xId: x.id, sId: st.id, field: 'weight' })} aria-label={`${n + 1}セット目の重量 ${shown('weight')}`}>
+                    <button className={`cell ${editing('weight') ? 'editing' : ''} ${editing('weight') && fresh ? 'fresh' : ''}`} onClick={() => openCell({ xId: x.id, sId: st.id, field: 'weight' })} aria-label={`${name}の重量 ${shown('weight')}`}>
                       {shown('weight')}
                     </button>
-                    <button className={`cell ${editing('reps') ? 'editing' : ''} ${editing('reps') && fresh ? 'fresh' : ''}`} onClick={() => openCell({ xId: x.id, sId: st.id, field: 'reps' })} aria-label={`${n + 1}セット目の回数 ${shown('reps')}`}>
+                    <button className={`cell ${editing('reps') ? 'editing' : ''} ${editing('reps') && fresh ? 'fresh' : ''}`} onClick={() => openCell({ xId: x.id, sId: st.id, field: 'reps' })} aria-label={`${name}の回数 ${shown('reps')}`}>
                       {shown('reps')}
                     </button>
                     <button className="check" onClick={() => toggleDone(x, st)} aria-pressed={st.done} aria-label={st.done ? '完了を取り消す' : 'セット完了'}>
                       {pr ? <b>PR</b> : <IconCheck size={24} />}
                     </button>
                   </div>
+                  {st.done && rirFor === st.id && (
+                    <div className="rir-row" role="group" aria-label={`${name}の余力（あと何回できたか）`}>
+                      <span>余力</span>
+                      {RIR_CHOICES.map((c) => (
+                        <button
+                          key={c.v}
+                          className={`rir-chip ${st.rir === c.v ? 'on' : ''}`}
+                          aria-pressed={st.rir === c.v}
+                          onClick={() => {
+                            patchSet(x.id, st.id, (v) => ({ ...v, rir: c.v }))
+                            setRirFor(null)
+                          }}
+                        >
+                          {c.label}
+                        </button>
+                      ))}
+                      <button className="rir-chip skip" onClick={() => setRirFor(null)}>スキップ</button>
+                    </div>
+                  )}
+                  {st.done && st.rir !== undefined && rirFor !== st.id && (
+                    <p className="rir-tag">余力: {rirLabel(st.rir)}</p>
+                  )}
+                  </Fragment>
                 )
               })}
 
@@ -527,6 +791,9 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
 
         <button className="btn wide add-ex" onClick={() => { closeKeypad(); setPicking(true) }}>
           <IconPlus size={18} /> 種目を追加
+        </button>
+        <button className="btn wide" onClick={() => { closeKeypad(); setCalc({ tab: 'rm' }) }}>
+          <IconBolt size={18} /> RM・プレート計算
         </button>
 
         <label className="field">
@@ -547,12 +814,13 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
         </button>
       </div>
 
+      {s.rest && !cursor && live && <p className="rest-note">画面を消さないでください（マナーモードだと音が鳴らない場合があります）</p>}
       {s.rest && !cursor && <RestDock endsAt={s.rest.endsAt} duration={s.rest.duration} />}
 
       {cursor && cursorExercise && (
         <Keypad
           field={cursor.field}
-          label={`${findExercise(s, cursorExercise.exerciseId).name} ${cursorSetIdx + 1}セット目 / ${cursor.field === 'weight' ? '重量 kg' : isSeconds(cursorExercise.exerciseId) ? '秒数' : '回数'}`}
+          label={`${findExercise(s, cursorExercise.exerciseId).name} ${setName(cursorExercise.sets, cursorSetIdx)} / ${cursor.field === 'weight' ? '重量 kg' : isSeconds(cursorExercise.exerciseId) ? '秒数' : '回数'}`}
           value={buffer}
           step={stepFor(findExercise(s, cursorExercise.exerciseId).equipment, s.settings.weightStep)}
           restEndsAt={s.rest?.endsAt ?? null}
@@ -563,6 +831,25 @@ export function WorkoutScreen({ onMinimize, onClosed }: { onMinimize: () => void
         />
       )}
 
+      {restId && <RestSheet exerciseId={restId} onClose={() => setRestId(null)} />}
+      {calc && <RmSheet initial={calc.tab} plateWeight={calc.weight} onClose={() => setCalc(null)} />}
+      {setMenu && (() => {
+        const mx = a.exercises.find((v) => v.id === setMenu.xId)
+        const mi = mx ? mx.sets.findIndex((v) => v.id === setMenu.sId) : -1
+        if (!mx || mi < 0) return null
+        const st = mx.sets[mi]
+        return (
+          <Sheet title={`${findExercise(s, mx.exerciseId).name} ${setName(mx.sets, mi)}`} onClose={() => setSetMenu(null)}>
+            <button className="btn wide" onClick={() => { toggleWarmup(mx, st); setSetMenu(null) }}>
+              {st.warmup ? '本番セットに戻す' : 'ウォームアップにする（記録・PRの集計対象外）'}
+            </button>
+            <button className="btn wide danger-text" onClick={() => { deleteSet(mx, st); setSetMenu(null) }}>
+              <IconClose size={16} /> このセットを削除
+            </button>
+            <p className="hint">番号の長押し（0.5秒）でも、ウォームアップを切り替えられます。</p>
+          </Sheet>
+        )
+      })()}
       {picking && <ExercisePicker onClose={() => setPicking(false)} onPick={addExercises} />}
       {guideId && <GuideSheet exerciseId={guideId} onClose={() => setGuideId(null)} />}
     </div>

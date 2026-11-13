@@ -1,15 +1,101 @@
 import { useMemo, useState } from 'react'
 import { Sheet } from './Common'
 import { IconMinus, IconPlus } from './Icons'
-import { doneSets, e1rm, fmtKg } from '../lib/stats'
+import { DEFAULT_PLATES, doneSets, e1rm, fmtKg, plateCalc } from '../lib/stats'
+import '../workout-extra.css'
 import { findExercise, useStore } from '../lib/store'
 
 /** 回数ごとの目的の目安（一般的な区分） */
 const purpose = (reps: number) => (reps <= 5 ? '筋力' : reps <= 12 ? '筋肥大' : '筋持久力')
 
-/** 重量×回数から推定1RMを出し、回数別の目安重量を一覧する */
-export function RmSheet({ onClose }: { onClose: () => void }) {
+const PLATE_KEY = 'kinetic.plates'
+const loadPlates = (): number[] => {
+  try {
+    const v = JSON.parse(localStorage.getItem(PLATE_KEY) ?? 'null')
+    if (Array.isArray(v) && v.every((n) => typeof n === 'number' && n > 0)) return v
+  } catch {
+    /* 既定値を使う */
+  }
+  return DEFAULT_PLATES
+}
+
+/** 目標重量から、バーの片側に付けるプレートの枚数を出す */
+function PlatePanel({ initialWeight }: { initialWeight?: number }) {
+  const [targetText, setTargetText] = useState(initialWeight ? fmtKg(initialWeight) : '60')
+  const [barText, setBarText] = useState('20')
+  const [have, setHave] = useState<number[]>(loadPlates)
+  const target = parseFloat(targetText)
+  const bar = parseFloat(barText)
+  const valid = Number.isFinite(target) && target > 0 && Number.isFinite(bar) && bar >= 0
+  const res = valid ? plateCalc(target, bar, have) : null
+  const toggle = (p: number) =>
+    setHave((cur) => {
+      const next = cur.includes(p) ? cur.filter((v) => v !== p) : [...cur, p]
+      try {
+        localStorage.setItem(PLATE_KEY, JSON.stringify(next))
+      } catch {
+        /* 保存できなくても計算は続ける */
+      }
+      return next
+    })
+  return (
+    <>
+      <div className="rm-input">
+        <label className="field">
+          <span>目標重量</span>
+          <div className="inline-form">
+            <input className="text num" inputMode="decimal" value={targetText} onChange={(e) => setTargetText(e.target.value.replace(/[^\d.]/g, ''))} />
+            <span className="unit">kg</span>
+          </div>
+        </label>
+        <label className="field">
+          <span>バーの重さ</span>
+          <div className="inline-form">
+            <input className="text num" inputMode="decimal" value={barText} onChange={(e) => setBarText(e.target.value.replace(/[^\d.]/g, ''))} />
+            <span className="unit">kg</span>
+          </div>
+        </label>
+      </div>
+      <div className="field">
+        <span>手持ちのプレート（タップで切り替え）</span>
+        <div className="chips scroll">
+          {DEFAULT_PLATES.map((p) => (
+            <button key={p} className={`chip ${have.includes(p) ? 'on' : ''}`} aria-pressed={have.includes(p)} onClick={() => toggle(p)}>
+              {p}kg
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="rm-result">
+        <span>片側に付けるプレート</span>
+        {res && res.perSide.length > 0 ? (
+          <ul className="plate-list">
+            {res.perSide.map((v) => (
+              <li key={v.plate}>
+                <b className="num">{v.plate}<small>kg</small></b>
+                <span className="num">× {v.count}枚</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <b className="num">{res ? 'プレート不要' : '---'}</b>
+        )}
+      </div>
+      {res && (
+        <p className={res.remainder !== 0 ? 'plate-warn' : 'hint'}>
+          合計 {fmtKg(res.total)}kg（バー{fmtKg(bar)}kg＋両側{fmtKg((res.total - bar) / 2)}kg×2）
+          {res.remainder > 0 && ` ／ 目標まであと${fmtKg(res.remainder)}kg。手持ちのプレートでは組めません`}
+          {res.remainder < 0 && ' ／ バーより軽い目標です'}
+        </p>
+      )}
+    </>
+  )
+}
+
+/** 重量×回数から推定1RMを出し、回数別の目安重量を一覧する。「プレート計算」タブも持つ */
+export function RmSheet({ onClose, initial = 'rm', plateWeight }: { onClose: () => void; initial?: 'rm' | 'plate'; plateWeight?: number }) {
   const s = useStore()
+  const [tab, setTab] = useState<'rm' | 'plate'>(initial)
   const step = s.settings.weightStep
   const [weightText, setWeightText] = useState('60')
   const [reps, setReps] = useState(5)
@@ -34,7 +120,12 @@ export function RmSheet({ onClose }: { onClose: () => void }) {
   const round = (n: number) => Math.round(n / step) * step
 
   return (
-    <Sheet title="RM計算" onClose={onClose}>
+    <Sheet tall title={tab === 'rm' ? 'RM計算' : 'プレート計算'} onClose={onClose}>
+      <div className="chips" role="tablist">
+        <button role="tab" aria-selected={tab === 'rm'} className={`chip ${tab === 'rm' ? 'on' : ''}`} onClick={() => setTab('rm')}>RM計算</button>
+        <button role="tab" aria-selected={tab === 'plate'} className={`chip ${tab === 'plate' ? 'on' : ''}`} onClick={() => setTab('plate')}>プレート計算</button>
+      </div>
+      {tab === 'plate' ? <PlatePanel initialWeight={plateWeight} /> : <>
       <div className="rm-input">
         <label className="field">
           <span>重量</span>
@@ -85,6 +176,7 @@ export function RmSheet({ onClose }: { onClose: () => void }) {
         })}
       </ul>
       <p className="hint">Epley式（重量×(1+回数÷30)）による推定です。実際の限界は体調や種目で変わるため、目安として使ってください。表の重量は設定の増減幅（{step}kg）に丸めています。</p>
+      </>}
     </Sheet>
   )
 }

@@ -7,6 +7,8 @@ export interface Exercise {
   muscle: Muscle
   equipment: Equipment
   custom?: boolean
+  /** ソフト削除済み（選択肢・設定一覧には出さないが、過去の記録では元の名前・部位で表示する） */
+  deleted?: boolean
 }
 
 export interface SetEntry {
@@ -16,12 +18,16 @@ export interface SetEntry {
   done: boolean
   /** ウォームアップは集計・PR・前回値の対象外 */
   warmup?: boolean
+  /** あと何回できたか（任意）。3 は「3回以上」 */
+  rir?: 0 | 1 | 2 | 3
 }
 
 export interface WorkoutExercise {
   id: string
   exerciseId: string
   sets: SetEntry[]
+  /** この種目のメモ（フォームの注意など） */
+  note?: string
 }
 
 export interface Workout {
@@ -65,6 +71,10 @@ export interface Settings {
   heightCm: number | null
   /** 目標体重。未設定なら null */
   goalWeight: number | null
+  /** 週の目標回数。未設定なら undefined */
+  weeklyGoal?: number
+  /** 種目IDごとの休憩秒数。無い種目は restSeconds を使う */
+  restByExercise?: Record<string, number>
 }
 
 /** 体組成の記録（1日1件）。測っていない項目は null */

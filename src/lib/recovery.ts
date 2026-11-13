@@ -4,18 +4,19 @@ import { fromKey, toKey } from './date'
 import { doneSets } from './stats'
 
 /**
- * 部位ごとの回復状態の推定。
- * 根拠: 同一部位の回復はおおむね24〜72時間。限界まで追い込む・ボリュームが多い・
- * 初心者ほど回復が遅い（Damas 2016, Morán-Navarro 2017 など）。
- * ただし部位別の基準時間は研究で確定したものではなく、実務上の目安をもとにした推定値。
+ * 部位ごとの「前回からの間隔」の目安。
+ * 同一部位の回復はおおむね24〜72時間と言われ、追い込みの度合い・ボリューム・経験で大きく変わる
+ * （Damas 2016, Morán-Navarro 2017 など）。ただし部位別の基準時間に確かな科学的根拠はなく、
+ * 実務上の目安をもとにした推定値。「回復済み」と断定せず、主表示は「前回から○時間経過」とし、
+ * 色・割合は参考の目安として扱う。実際の筋肉痛や疲労感を優先すること。
  */
 
 export type Stage = 'damaged' | 'recovering' | 'ready' | 'idle' | 'untrained'
 
 export const STAGE_LABEL: Record<Stage, string> = {
-  damaged: 'ダメージ直後',
-  recovering: '回復中',
-  ready: '回復済み',
+  damaged: 'トレ直後',
+  recovering: '回復途中（目安）',
+  ready: '間隔は十分（目安）',
   idle: 'しばらく未実施',
   untrained: '記録なし',
 }
@@ -29,9 +30,9 @@ export const STAGE_COLOR: Record<Stage, string> = {
 }
 
 export const STAGE_NOTE: Record<Stage, string> = {
-  damaged: '筋繊維にダメージが残っている時期。同じ部位の追い込みは避けましょう',
-  recovering: '修復の途中です。軽めなら可、強い負荷は回復を待つのがおすすめ',
-  ready: '回復の目安に達しています。鍛えるのに向いています',
+  damaged: '前回から間隔が短い時期の目安です。同じ部位の追い込みは避けましょう',
+  recovering: '修復の途中と推定される目安です。軽めなら可、強い負荷は間隔をあけるのがおすすめ',
+  ready: '前回から十分な間隔があいた目安です。体の感覚（筋肉痛・疲労）も確認して鍛えましょう',
   idle: '1週間以上トレーニングしていません',
   untrained: 'まだ記録がありません',
 }
@@ -48,13 +49,15 @@ const HEAVY_COMPOUND = new Set(['deadlift', 'squat', 'front-squat', 'rdl', 'barb
 export interface RegionState {
   region: Region
   stage: Stage
-  /** 回復の進み具合 0〜1（回復済み・未実施は1） */
+  /** 経過の進み具合 0〜1（目安。十分な間隔・未実施は1） */
   progress: number
-  /** 回復済みになるまでの残り時間（h）。回復済みは0 */
+  /** 目安の間隔に達するまでの残り時間（h）。達していれば0 */
   remainingHours: number
-  /** 回復済みになる予想時刻 */
+  /** 目安の間隔に達する予想時刻 */
   readyAt: number | null
   lastAt: number | null
+  /** 前回のトレーニングからの経過時間（h）。未実施は null */
+  elapsedHours: number | null
   lastDate: string | null
   /** 直近セッションでの実質セット数 */
   lastSets: number
@@ -107,7 +110,7 @@ export function computeRegionStates(workouts: Workout[], exercises: Exercise[], 
     const last = sessions[sessions.length - 1]
 
     if (!last) {
-      result[region] = { region, stage: 'untrained', progress: 1, remainingHours: 0, readyAt: null, lastAt: null, lastDate: null, lastSets: 0, weeklySets: 0, needHours: 0, strength: 0 }
+      result[region] = { region, stage: 'untrained', progress: 1, remainingHours: 0, readyAt: null, lastAt: null, elapsedHours: null, lastDate: null, lastSets: 0, weeklySets: 0, needHours: 0, strength: 0 }
       continue
     }
 
@@ -140,6 +143,7 @@ export function computeRegionStates(workouts: Workout[], exercises: Exercise[], 
       remainingHours: Math.max(0, hours - elapsed),
       readyAt: last.at + hours * 3600000,
       lastAt: last.at,
+      elapsedHours: Math.max(0, elapsed),
       lastDate: last.date,
       lastSets: Math.round(loadSets * 10) / 10,
       weeklySets: Math.round(weekly * 10) / 10,
@@ -148,6 +152,16 @@ export function computeRegionStates(workouts: Workout[], exercises: Exercise[], 
     }
   }
   return result
+}
+
+/** 前回からの経過時間。「前回から○○経過」の主表示に使う */
+export const fmtElapsed = (h: number) => {
+  if (h < 1) return '1時間未満'
+  const total = Math.round(h)
+  if (total < 48) return `約${total}時間`
+  const d = Math.floor(total / 24)
+  const rest = total - d * 24
+  return d >= 7 || rest < 1 ? `約${d}日` : `約${d}日${rest}時間`
 }
 
 export const fmtRemaining = (h: number) => {
@@ -220,10 +234,10 @@ export function advise(states: Record<Region, RegionState>, exercises: Exercise[
   const rest = REGIONS.map((r) => states[r.id])
     .filter((s) => s.stage === 'damaged' || (s.stage === 'recovering' && s.progress < 0.85))
     .sort((a, b) => a.progress - b.progress)
-    .map((s) => ({ region: s.region, reason: `${STAGE_LABEL[s.stage]}・あと${fmtRemaining(s.remainingHours)}` }))
+    .map((s) => ({ region: s.region, reason: `前回から${s.elapsedHours === null ? '' : fmtElapsed(s.elapsedHours)}経過・目安はあと${fmtRemaining(s.remainingHours)}` }))
 
   const scored = (Object.keys(FAMILY) as Family[]).map((f) => {
-    // 回復していて、かつ今週の目標にまだ届いていない部位だけを候補にする
+    // 間隔があいていて、かつ今週の目標にまだ届いていない部位だけを候補にする
     const ready = FAMILY[f].regions.filter((r) => usable(states[r]) && need(states[r]) >= 0.1)
     // 主役の部位の平均で比べる（部位数が多い系統が有利にならないように）。主役が使えない系統は候補にしない
     const lead = ready.filter((r) => PRIMARY.has(r))
@@ -238,7 +252,7 @@ export function advise(states: Record<Region, RegionState>, exercises: Exercise[
     return {
       kind: 'rest',
       title: '今日は休養',
-      headline: '各部位がまだ回復中か、直近7日の目標セットを満たしています。軽い散歩やストレッチで回復を促しましょう。',
+      headline: '各部位は前回から間隔が短めか、直近7日の目標セットを満たしている目安です。軽い散歩やストレッチで回復を促しましょう。',
       focus: [],
       rest,
       items: [],
@@ -257,7 +271,7 @@ export function advise(states: Record<Region, RegionState>, exercises: Exercise[
     title: `今日は ${FAMILY[best.f].label}`,
     headline:
       focus.length > 0
-        ? `${focus.slice(0, 3).map((f) => regionInfo(f.region).label).join('・')}は回復が進んでおり、直近7日のセット数が不足している部位です。` +
+        ? `${focus.slice(0, 3).map((f) => regionInfo(f.region).label).join('・')}は前回から間隔があいており、直近7日のセット数が不足している部位です（間隔は目安）。` +
           (done > 0 ? `（${done}部位は直近7日の目標達成済み）` : '')
         : '',
     focus,

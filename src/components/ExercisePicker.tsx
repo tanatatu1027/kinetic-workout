@@ -100,6 +100,7 @@ export function ExercisePicker({ onClose, onPick }: { onClose: () => void; onPic
   return (
     <>
     <Sheet
+      tall
       title={browse ? '種目ガイド' : '種目を選ぶ'}
       onClose={onClose}
       footer={

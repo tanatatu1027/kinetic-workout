@@ -93,15 +93,6 @@ const limb = (keys: [number, number][], radial = 28) => {
   return new LatheGeometry(pts, radial)
 }
 
-// 胴体：腰→くびれ→ろく骨→広い肩→首へのなだらかな僧帽筋の傾斜
-const torsoGeo = new LatheGeometry(
-  [
-    [0.0, -0.08], [0.15, -0.08], [0.168, 0.0], [0.15, 0.12], [0.138, 0.24], [0.15, 0.38],
-    [0.185, 0.5], [0.215, 0.6], [0.215, 0.67], [0.16, 0.73], [0.075, 0.77], [0.045, 0.8], [0.0, 0.8],
-  ].map(([r, y]) => new Vector2(r, y)),
-  36,
-)
-
 interface Part {
   geo: BufferGeometry
   pos: V3
@@ -110,25 +101,38 @@ interface Part {
   mirror?: boolean
 }
 
-const PARTS: Part[] = [
-  { geo: new SphereGeometry(0.1, 32, 24), pos: [0, 0.91, 0.012], scale: [0.86, 1.14, 1.0] },
-  { geo: new CylinderGeometry(0.046, 0.054, 0.14, 20), pos: [0, 0.79, 0] },
-  { geo: torsoGeo, pos: [0, 0, 0], scale: [1, 1, 0.5] },
-  // 胸板・三角筋・臀部の盛り上がり
-  { geo: new SphereGeometry(1, 28, 20), pos: [0.098, 0.565, 0.078], scale: [0.108, 0.072, 0.05], mirror: true },
-  { geo: new SphereGeometry(1, 24, 18), pos: [0.258, 0.63, 0.0], scale: [0.058, 0.085, 0.066], mirror: true },
-  { geo: new SphereGeometry(1, 24, 18), pos: [0.078, -0.02, -0.07], scale: [0.088, 0.1, 0.078], mirror: true },
-  // 腕（上腕→前腕→手）
-  { geo: limb([[0.3, 0.036], [0.4, 0.043], [0.5, 0.05], [0.58, 0.05], [0.64, 0.044]]), pos: [0.272, 0, 0], mirror: true },
-  { geo: limb([[-0.0, 0.024], [0.08, 0.03], [0.18, 0.038], [0.24, 0.04], [0.3, 0.034]]), pos: [0.292, 0, 0], mirror: true },
-  { geo: new SphereGeometry(0.03, 16, 12), pos: [0.3, -0.04, 0], scale: [0.85, 1.5, 0.6], mirror: true },
-  // 脚（腿→すね）
-  { geo: limb([[-0.58, 0.05], [-0.45, 0.062], [-0.32, 0.088], [-0.15, 0.1], [-0.02, 0.098]], 32), pos: [0.093, 0, 0], mirror: true },
-  { geo: limb([[-1.0, 0.026], [-0.9, 0.034], [-0.78, 0.04], [-0.7, 0.054], [-0.64, 0.056], [-0.58, 0.05]], 28), pos: [0.083, 0, -0.004], mirror: true },
-  { geo: new SphereGeometry(0.05, 16, 12), pos: [0.083, -1.05, 0.045], scale: [0.85, 0.65, 2.0], mirror: true },
-]
+/** 人体形状は初回表示時に1度だけ作る（読み込み時には作らない） */
+let bodyGeoCache: BufferGeometry | null = null
+const getBodyGeo = () => (bodyGeoCache ??= buildBodyGeo())
 
-const bodyGeo = (() => {
+function buildBodyGeo() {
+  // 胴体：腰→くびれ→ろく骨→広い肩→首へのなだらかな僧帽筋の傾斜
+  const torsoGeo = new LatheGeometry(
+    [
+      [0.0, -0.08], [0.15, -0.08], [0.168, 0.0], [0.15, 0.12], [0.138, 0.24], [0.15, 0.38],
+      [0.185, 0.5], [0.215, 0.6], [0.215, 0.67], [0.16, 0.73], [0.075, 0.77], [0.045, 0.8], [0.0, 0.8],
+    ].map(([r, y]) => new Vector2(r, y)),
+    36,
+  )
+
+  const PARTS: Part[] = [
+    { geo: new SphereGeometry(0.1, 32, 24), pos: [0, 0.91, 0.012], scale: [0.86, 1.14, 1.0] },
+    { geo: new CylinderGeometry(0.046, 0.054, 0.14, 20), pos: [0, 0.79, 0] },
+    { geo: torsoGeo, pos: [0, 0, 0], scale: [1, 1, 0.5] },
+    // 胸板・三角筋・臀部の盛り上がり
+    { geo: new SphereGeometry(1, 28, 20), pos: [0.098, 0.565, 0.078], scale: [0.108, 0.072, 0.05], mirror: true },
+    { geo: new SphereGeometry(1, 24, 18), pos: [0.258, 0.63, 0.0], scale: [0.058, 0.085, 0.066], mirror: true },
+    { geo: new SphereGeometry(1, 24, 18), pos: [0.078, -0.02, -0.07], scale: [0.088, 0.1, 0.078], mirror: true },
+    // 腕（上腕→前腕→手）
+    { geo: limb([[0.3, 0.036], [0.4, 0.043], [0.5, 0.05], [0.58, 0.05], [0.64, 0.044]]), pos: [0.272, 0, 0], mirror: true },
+    { geo: limb([[-0.0, 0.024], [0.08, 0.03], [0.18, 0.038], [0.24, 0.04], [0.3, 0.034]]), pos: [0.292, 0, 0], mirror: true },
+    { geo: new SphereGeometry(0.03, 16, 12), pos: [0.3, -0.04, 0], scale: [0.85, 1.5, 0.6], mirror: true },
+    // 脚（腿→すね）
+    { geo: limb([[-0.58, 0.05], [-0.45, 0.062], [-0.32, 0.088], [-0.15, 0.1], [-0.02, 0.098]], 32), pos: [0.093, 0, 0], mirror: true },
+    { geo: limb([[-1.0, 0.026], [-0.9, 0.034], [-0.78, 0.04], [-0.7, 0.054], [-0.64, 0.056], [-0.58, 0.05]], 28), pos: [0.083, 0, -0.004], mirror: true },
+    { geo: new SphereGeometry(0.05, 16, 12), pos: [0.083, -1.05, 0.045], scale: [0.85, 0.65, 2.0], mirror: true },
+  ]
+
   const geos: BufferGeometry[] = []
   const m = new Matrix4()
   for (const p of PARTS) {
@@ -146,7 +150,8 @@ const bodyGeo = (() => {
   const merged = mergeGeometries(geos, false)!
   merged.computeVertexNormals()
   return merged
-})()
+}
+
 
 const SKIN = new Color('#3d5066')
 
@@ -251,7 +256,7 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
         )
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance += gEm;')
     }
-    const bodyMesh = new Mesh(track(bodyGeo.clone()), bodyMat)
+    const bodyMesh = new Mesh(track(getBodyGeo().clone()), bodyMat)
     body.add(bodyMesh)
 
     const centers = zoneList.map((z) => ({ region: z.region, c: new Vector3(...z.c), r: z.r }))

@@ -1,0 +1,83 @@
+/* ワークアウト・サマリー・ホーム固有の追加スタイル。共通の部品は styles.css 側（画面・デザイン担当）に任せる */
+
+/* ---- 種目カード ---- */
+.ex-tools { gap: 2px; margin-right: -6px; }
+.ex-tools button { width: 44px; height: 44px; }
+.ex-tools .ex-remove { margin-left: 14px; border-left: 1px solid var(--line); border-radius: 0; }
+.ex-head h3 small { margin-top: 3px; }
+
+.ex-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 4px 2px; }
+.ex-last { font-size: 14px; color: var(--muted); margin-right: 4px; }
+.meta-chip { min-height: 44px; padding: 0 12px; font-size: 14px; font-weight: 700; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); white-space: nowrap; }
+.meta-chip.on { color: var(--cyan); border-color: var(--cyan); }
+.ex-prevnote { font-size: 14px; color: var(--muted); padding: 2px 6px; overflow-wrap: anywhere; }
+.ex-note { margin: 4px 4px 0; width: calc(100% - 8px); font-size: 15px; }
+
+.suggest { font-size: 14px; line-height: 1.45; }
+.suggest:disabled { opacity: 0.6; }
+.suggest.warn { color: #ff8099; border-color: #7a3445; }
+
+/* ウォームアップ切替: 長押し中に枠が満ちていく（0.5秒） */
+.set-no { position: relative; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; }
+.set-no.pressing::after { content: ''; position: absolute; inset: 4px; border: 2px solid #ffc043; animation: wk-press 0.5s linear forwards; }
+@keyframes wk-press { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@media (prefers-reduced-motion: reduce) { .set-no.pressing::after { animation: none; } }
+
+.rest-stepper b { font-size: 26px; }
+.plate-list { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.plate-list li { display: flex; align-items: baseline; gap: 6px; padding: 6px 12px; background: var(--panel-2); border: 1px solid var(--line); }
+.plate-list b { font-size: 22px; }
+.plate-warn { font-size: 14px; color: #ffc043; }
+
+/* 休憩中の案内（休憩ドックの上に出す） */
+.rest-note { position: absolute; left: 12px; right: 12px; bottom: calc(86px + var(--safe-b)); z-index: 5; margin: 0; padding: 6px 10px; text-align: center; font-size: 13px; color: var(--muted); background: rgb(11 15 20 / 0.85); pointer-events: none; }
+
+/* ---- サマリー: 前回との比較 ---- */
+.summary-cmp { margin-top: 14px; text-align: left; }
+.summary-cmp h2 { margin-bottom: 6px; }
+.cmp-list li { display: flex; align-items: center; gap: 8px; min-height: 40px; border-bottom: 1px solid var(--line); font-size: 15px; }
+.cmp-list li > span:first-child { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.cmp-list b { font-family: var(--font-num); white-space: nowrap; }
+.cmp-up { color: var(--lime); }
+.cmp-down { color: #ff8099; }
+.cmp-same { color: var(--muted); }
+.cmp-sub { font-size: 13px; color: var(--muted); }
+
+/* ---- ホーム ---- */
+.tpl-row { min-height: 60px; }
+.tpl-name { font-size: 16px; }
+.tpl-meta { font-size: 13px; }
+.tpl-list .icon-btn { width: 48px; height: 48px; }
+.hint { font-size: 14px; }
+
+.goal-box { margin-top: 12px; padding: 10px 12px; background: var(--bg-2); border: 1px solid var(--line); }
+.goal-row { display: flex; align-items: center; gap: 8px; }
+.goal-row .goal-text { flex: 1; min-width: 0; font-size: 16px; font-weight: 700; }
+.goal-row .goal-text .num { font-size: 20px; color: var(--cyan); }
+.goal-bar { height: 6px; margin-top: 8px; background: var(--line); }
+.goal-bar i { display: block; height: 100%; background: var(--cyan); transition: width 0.3s; }
+.goal-done .goal-bar i { background: var(--lime); }
+.goal-done .goal-text .num { color: var(--lime); }
+.goal-cheer { margin-top: 6px; font-size: 14px; color: var(--lime); }
+.goal-set { min-height: 44px; font-size: 14px; color: var(--cyan); font-weight: 700; text-align: left; width: 100%; }
+.goal-mini { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; background: var(--panel-2); border: 1px solid var(--line); flex: none; }
+.goal-mini:disabled { opacity: 0.3; }
+
+.tpl-edit li { min-height: 52px; }
+.tpl-edit-name { font-size: 15px; }
+.tpl-sort-name { flex: 1; min-width: 0; padding: 0 4px; font-size: 16px; font-weight: 700; }
+.tpl-edit .icon-btn { width: 36px; }
+.tpl-edit-name { min-width: 60px; }
+
+/* ---- RIR（余力）の任意記録 ---- */
+.rir-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 2px 0 6px; font-size: 14px; color: var(--muted); }
+.rir-chip { min-height: 44px; padding: 0 12px; font-size: 14px; font-weight: 700; color: var(--text); background: var(--panel-2); border: 1px solid var(--line); white-space: nowrap; }
+.rir-chip.on { color: var(--cyan); border-color: var(--cyan); }
+.rir-chip.skip { color: var(--muted); font-weight: 500; }
+.rir-tag { margin: -2px 0 2px 44px; font-size: 14px; color: var(--muted); }
+
+/* ---- 設定: 種目ごとの休憩 ---- */
+.rest-overrides li { display: flex; align-items: center; gap: 10px; min-height: 52px; border-bottom: 1px solid var(--line); }
+.rest-overrides li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 16px; }
+.rest-overrides .btn { min-height: 44px; }
+.tpl-list .link { min-width: 44px; justify-content: center; padding: 0 4px; }

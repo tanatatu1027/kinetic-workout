@@ -60,7 +60,7 @@ export function GuideSheet({ exerciseId, onClose }: { exerciseId: string; onClos
   const m = muscleOf(ex.muscle)
 
   return (
-    <Sheet title={ex.name} onClose={onClose} footer={<button className="btn wide" onClick={onClose}>閉じる</button>}>
+    <Sheet tall title={ex.name} onClose={onClose} footer={<button className="btn wide" onClick={onClose}>閉じる</button>}>
       <div className="guide-tags">
         <MuscleBadge muscle={ex.muscle} />
         <span>{m.label}</span>

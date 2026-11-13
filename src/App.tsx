@@ -1,14 +1,12 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { UiHost, useNow } from './components/Common'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { IconBody, IconBodyComp, IconCalendar, IconChart, IconGear, IconHome, IconNext } from './components/Icons'
+import { IconBody, IconCalendar, IconChart, IconGear, IconHome, IconNext } from './components/Icons'
 import { fmtDuration, todayKey } from './lib/date'
 import { beep } from './lib/sound'
 import { clearRest, editWorkout, getState, startWorkout, useStore } from './lib/store'
 import { askConfirm, toast } from './lib/ui'
 import { AnalyticsScreen } from './screens/AnalyticsScreen'
-import { BodyCompScreen } from './screens/BodyCompScreen'
-import { BodyScreen } from './screens/BodyScreen'
 import { CalendarScreen } from './screens/CalendarScreen'
 import { HomeScreen } from './screens/HomeScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
@@ -16,12 +14,14 @@ import { SummaryScreen } from './screens/SummaryScreen'
 import { WorkoutScreen } from './screens/WorkoutScreen'
 import type { TemplateItem, Workout } from './types'
 
-type Tab = 'home' | 'body' | 'comp' | 'calendar' | 'analytics' | 'settings'
+// ボディ画面は three.js を含み重いので、開いたときに読み込む
+const BodyScreen = lazy(() => import('./screens/BodyScreen').then((m) => ({ default: m.BodyScreen })))
+
+type Tab = 'home' | 'body' | 'calendar' | 'analytics' | 'settings'
 
 const TABS: { id: Tab; label: string; icon: typeof IconHome }[] = [
   { id: 'home', label: 'ホーム', icon: IconHome },
   { id: 'body', label: 'ボディ', icon: IconBody },
-  { id: 'comp', label: '体組成', icon: IconBodyComp },
   { id: 'calendar', label: 'カレンダー', icon: IconCalendar },
   { id: 'analytics', label: '分析', icon: IconChart },
   { id: 'settings', label: '設定', icon: IconGear },
@@ -59,8 +59,9 @@ export default function App() {
   const [summary, setSummary] = useState<Workout | null>(null)
   const [calendarDate, setCalendarDate] = useState(todayKey())
   const [flash, setFlash] = useState(0)
-  useNow(60_000) // 日付をまたいだら再描画して「今日」を更新する
-  const day = todayKey()
+  // 日付をまたいだら再描画して「今日」を更新する。画面は作り直さない（入力中の内容を守るため）。
+  // 日付の更新が必要な画面は、描画のたびに todayKey() を読む（またはBodyCompのように自分で追従する）
+  useNow(60_000)
 
   useEffect(() => {
     document.documentElement.classList.toggle('hc', s.settings.highContrast)
@@ -117,10 +118,13 @@ export default function App() {
   return (
     <ErrorBoundary>
     <div className="app">
-      <main className="screen" key={`${tab}-${day}`}>
+      <main className="screen" key={tab}>
         {tab === 'home' && <HomeScreen onStart={begin} onShowDay={showCalendar} onOpenBody={() => setTab('body')} />}
-        {tab === 'body' && <BodyScreen onStart={begin} paused={workoutOpen} />}
-        {tab === 'comp' && <BodyCompScreen />}
+        {tab === 'body' && (
+          <Suspense fallback={<div className="page"><header className="page-head"><h1>BODY</h1></header><div className="panel body-skeleton tall" role="status"><span>読み込み中…</span></div></div>}>
+            <BodyScreen onStart={begin} paused={workoutOpen} />
+          </Suspense>
+        )}
         {tab === 'calendar' && <CalendarScreen selected={calendarDate} onSelect={setCalendarDate} onStart={begin} onEdit={edit} />}
         {tab === 'analytics' && <AnalyticsScreen />}
         {tab === 'settings' && <SettingsScreen />}
@@ -133,7 +137,7 @@ export default function App() {
       <nav className="nav" aria-label="メイン">
         {TABS.map((t) => (
           <button key={t.id} className={tab === t.id ? 'on' : ''} onClick={() => setTab(t.id)} aria-current={tab === t.id ? 'page' : undefined}>
-            <t.icon />
+            <t.icon size={24} />
             <span>{t.label}</span>
           </button>
         ))}

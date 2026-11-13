@@ -1,11 +1,14 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from 'react'
 import type { StartOptions } from '../App'
-import { BodyModel, type RegionLook } from '../components/BodyModel'
+import type { RegionLook } from '../components/BodyModel'
 import { Panel } from '../components/Common'
 import { REGIONS, regionInfo, type Region } from '../data/regions'
-import { buildMenu, fmtRemaining, STAGE_COLOR, STAGE_LABEL, STAGE_NOTE, WEEKLY_TARGET, type Stage } from '../lib/recovery'
+import { buildMenu, fmtElapsed, fmtRemaining, STAGE_COLOR, STAGE_LABEL, STAGE_NOTE, WEEKLY_TARGET, type Stage } from '../lib/recovery'
 import { findExercise, useStore } from '../lib/store'
 import { useRecovery } from '../lib/useRecovery'
+
+/** three.js を含む重い部品は、ボディ画面を開いたときに読み込む */
+const BodyModel = lazy(() => import('../components/BodyModel').then((m) => ({ default: m.BodyModel })))
 
 const LEGEND: Stage[] = ['damaged', 'recovering', 'ready', 'untrained']
 
@@ -63,7 +66,9 @@ export function BodyScreen({ onStart, paused }: { onStart: (o: StartOptions) => 
           {noGl ? (
             <p className="empty big">3D表示に対応していない環境です。下の一覧から部位を選べます</p>
           ) : (
-            <BodyModel look={look} selected={selected} onToggle={toggle} snap={snap} paused={paused} onAngle={onAngle} onUnsupported={() => setNoGl(true)} />
+            <Suspense fallback={<div className="body-skeleton" role="status" aria-label="3Dモデルを読み込み中"><span>3Dモデルを読み込み中…</span></div>}>
+              <BodyModel look={look} selected={selected} onToggle={toggle} snap={snap} paused={paused} onAngle={onAngle} onUnsupported={() => setNoGl(true)} />
+            </Suspense>
           )}
           <div className="body-hud" aria-hidden="true">
             <span className="num" ref={rotRef}>ROT 000°</span>
@@ -74,6 +79,7 @@ export function BodyScreen({ onStart, paused }: { onStart: (o: StartOptions) => 
           </div>
         </div>
         <div className="legend stage-legend">
+          <b className="legend-title">色は目安</b>
           {LEGEND.map((st) => (
             <span key={st}><StageDot stage={st} />{st === 'untrained' ? '未記録・未実施' : STAGE_LABEL[st]}</span>
           ))}
@@ -91,7 +97,7 @@ export function BodyScreen({ onStart, paused }: { onStart: (o: StartOptions) => 
             <button className="btn primary" onClick={() => onStart({ title, items: menu })}>開始</button>
           </div>
         )}
-        <p className="hint">ドラッグで360°回転、部位をタップで選択。色は最後のトレーニングからの経過で変わります。</p>
+        <p className="hint">ドラッグで360°回転、部位をタップで選択。色は最後のトレーニングからの経過時間をもとにした目安です。</p>
       </Panel>
 
       <Panel label="ADVISOR" className="advisor">
@@ -151,13 +157,14 @@ export function BodyScreen({ onStart, paused }: { onStart: (o: StartOptions) => 
                       <span className="sel-stage" style={{ color: STAGE_COLOR[st.stage] }}>{STAGE_LABEL[st.stage]}</span>
                     </div>
                     {st.lastAt !== null && (
-                      <div className="recov-bar" role="img" aria-label={`回復 ${Math.round(st.progress * 100)}%`}>
+                      <div className="recov-bar" role="img" aria-label={`経過の目安 ${Math.round(st.progress * 100)}%`}>
                         <i style={{ width: `${st.progress * 100}%`, background: STAGE_COLOR[st.stage] }} />
                       </div>
                     )}
+                    {st.elapsedHours !== null && <p className="sel-elapsed num">前回から{fmtElapsed(st.elapsedHours)}経過</p>}
                     <p className="sel-note">{STAGE_NOTE[st.stage]}</p>
                     <dl className="kv sm">
-                      {st.lastAt !== null && st.remainingHours > 0 && (<><dt>回復の目安</dt><dd>あと{fmtRemaining(st.remainingHours)}（{fmtAt(st.readyAt!)}）</dd></>)}
+                      {st.lastAt !== null && st.remainingHours > 0 && (<><dt>間隔の目安</dt><dd>あと{fmtRemaining(st.remainingHours)}（{fmtAt(st.readyAt!)}）</dd></>)}
                       {st.lastDate && (<><dt>前回</dt><dd>{st.lastDate.slice(5).replace('-', '/')}・{st.lastSets}セット</dd></>)}
                       <dt>直近7日のセット</dt>
                       <dd className="num">{st.weeklySets} / {WEEKLY_TARGET}</dd>
@@ -168,7 +175,7 @@ export function BodyScreen({ onStart, paused }: { onStart: (o: StartOptions) => 
             </ul>
             {notReady.length > 0 && (
               <p className="warn">
-                {notReady.map((r) => regionInfo(r).label).join('・')}はまだ回復の途中です。強い追い込みは避け、軽めの負荷にするか回復を待つのがおすすめです。
+                {notReady.map((r) => regionInfo(r).label).join('・')}は前回からの間隔が短めです（目安）。強い追い込みは避け、軽めの負荷にするか、間隔をあけるのがおすすめです。
               </p>
             )}
             <div className="menu-preview">
@@ -197,8 +204,8 @@ export function BodyScreen({ onStart, paused }: { onStart: (o: StartOptions) => 
                   <StageDot stage={st.stage} />
                   <span className="region-name">{r.label}</span>
                   <span className="region-state">
-                    {STAGE_LABEL[st.stage]}
-                    {st.remainingHours > 0 && st.lastAt !== null && <small>あと{fmtRemaining(st.remainingHours)}</small>}
+                    {st.elapsedHours === null ? STAGE_LABEL[st.stage] : <>前回から{fmtElapsed(st.elapsedHours)}</>}
+                    <small>{st.elapsedHours === null ? '' : STAGE_LABEL[st.stage]}</small>
                   </span>
                 </button>
               </li>
@@ -208,7 +215,7 @@ export function BodyScreen({ onStart, paused }: { onStart: (o: StartOptions) => 
       </Panel>
 
       <p className="hint disclaimer">
-        回復の状態は、トレーニング記録（部位・セット数・経過時間）から推定した目安です。個人差が大きく、医学的な診断ではありません。実際の筋肉痛や疲労感を優先し、痛みが続くときは休んでください。
+        部位ごとの色・割合・時間は、トレーニング記録（部位・セット数・経過時間）から推定した目安で、科学的に確立した回復時間ではありません。個人差が大きく、医学的な診断でもありません。実際の筋肉痛や疲労感を優先し、痛みが続くときは休んでください。
       </p>
     </div>
   )

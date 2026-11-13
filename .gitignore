@@ -2,3 +2,7 @@ node_modules
 dist
 dev-dist
 *.local
+
+.env
+.env.*
+!.env.example

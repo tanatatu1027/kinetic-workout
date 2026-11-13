@@ -163,9 +163,12 @@ export function CalendarScreen({ selected, onSelect, onStart, onEdit }: Props) {
     <div className="page">
       <header className="page-head">
         <h1>CALENDAR</h1>
-        <div className="seg" role="tablist">
-          <button role="tab" aria-selected={view === 'month'} className={view === 'month' ? 'on' : ''} onClick={() => setView('month')}>月</button>
-          <button role="tab" aria-selected={view === 'year'} className={view === 'year' ? 'on' : ''} onClick={() => setView('year')}>年</button>
+        <div className="head-actions">
+          {selected !== today && <button className="link" onClick={() => onSelect(today)}>今日へ</button>}
+          <div className="seg" role="group" aria-label="表示の切り替え">
+            <button aria-pressed={view === 'month'} className={view === 'month' ? 'on' : ''} onClick={() => setView('month')}>月</button>
+            <button aria-pressed={view === 'year'} className={view === 'year' ? 'on' : ''} onClick={() => setView('year')}>年</button>
+          </div>
         </div>
       </header>
 

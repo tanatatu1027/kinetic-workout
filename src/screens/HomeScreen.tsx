@@ -4,24 +4,36 @@ import { MuscleBadge, Panel, Sheet, Stat } from '../components/Common'
 import { RmSheet } from '../components/RmSheet'
 import { ExerciseThumb, GuideSheet } from '../components/ExerciseGuide'
 import { ExercisePicker } from '../components/ExercisePicker'
-import { IconBolt, IconClose, IconInfo, IconMinus, IconNext, IconPlus } from '../components/Icons'
+import { IconBolt, IconClose, IconDown, IconInfo, IconMinus, IconNext, IconPlus, IconUp } from '../components/Icons'
 import { addDays, fmtLong, startOfWeek, toKey, todayKey, WEEK_JP } from '../lib/date'
 import { weekStreak } from '../lib/insights'
 import { exportJson } from '../lib/backup'
+import { cloudConfigured, getCode, useCloudStatus } from '../lib/cloud'
 import { fmtVolume, musclesOf, workoutSetCount, workoutVolume } from '../lib/stats'
-import { deleteTemplate, findExercise, saveTemplate, useStore } from '../lib/store'
+import { deleteTemplate, findExercise, moveTemplate, saveTemplate, setWeeklyGoal, updateTemplate, useStore } from '../lib/store'
 import { askConfirm } from '../lib/ui'
 import { useRecovery } from '../lib/useRecovery'
 import type { Muscle, Template, TemplateItem } from '../types'
+import '../workout-extra.css'
 
 const isIos = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1)
 const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true
 
-function TemplateBuilder({ onClose }: { onClose: () => void }) {
+/** テンプレートの作成。template を渡すと、その名前・種目・並びを編集する（内蔵テンプレートも可） */
+function TemplateBuilder({ onClose, template }: { onClose: () => void; template?: Template }) {
   const s = useStore()
-  const [name, setName] = useState('')
-  const [items, setItems] = useState<TemplateItem[]>([])
+  const [name, setName] = useState(template?.name ?? '')
+  const [items, setItems] = useState<TemplateItem[]>(template?.items ?? [])
   const [picking, setPicking] = useState(false)
+
+  const move = (i: number, d: number) =>
+    setItems((list) => {
+      const j = i + d
+      if (j < 0 || j >= list.length) return list
+      const next = [...list]
+      ;[next[i], next[j]] = [next[j], next[i]]
+      return next
+    })
 
   const change = (i: number, d: number) =>
     setItems((list) => list.map((it, n) => (n === i ? { ...it, sets: Math.min(30, Math.max(1, it.sets + d)) } : it)))
@@ -29,14 +41,16 @@ function TemplateBuilder({ onClose }: { onClose: () => void }) {
   return (
     <>
       <Sheet
-        title="テンプレートを作成"
+        tall
+        title={template ? 'テンプレートを編集' : 'テンプレートを作成'}
         onClose={onClose}
         footer={
           <button
             className="btn primary wide"
             disabled={!name.trim() || items.length === 0}
             onClick={() => {
-              saveTemplate(name.trim(), items)
+              if (template) updateTemplate(template.id, { name: name.trim(), items })
+              else saveTemplate(name.trim(), items)
               onClose()
             }}
           >
@@ -55,6 +69,8 @@ function TemplateBuilder({ onClose }: { onClose: () => void }) {
               <li key={it.exerciseId}>
                 <MuscleBadge muscle={ex.muscle} />
                 <span className="tpl-edit-name">{ex.name}</span>
+                <button className="icon-btn" onClick={() => move(i, -1)} disabled={i === 0} aria-label={`${ex.name}を上へ`}><IconUp size={18} /></button>
+                <button className="icon-btn" onClick={() => move(i, 1)} disabled={i === items.length - 1} aria-label={`${ex.name}を下へ`}><IconDown size={18} /></button>
                 <button className="icon-btn" onClick={() => change(i, -1)} aria-label="セットを減らす"><IconMinus size={18} /></button>
                 <span className="num">{it.sets}</span>
                 <button className="icon-btn" onClick={() => change(i, 1)} aria-label="セットを増やす"><IconPlus size={18} /></button>
@@ -149,6 +165,9 @@ export function HomeScreen({ onStart, onShowDay, onOpenBody }: { onStart: (o: St
   const [rmOpen, setRmOpen] = useState(false)
   const [preview, setPreview] = useState<Template | null>(null)
   const [guideOpen, setGuideOpen] = useState(false)
+  const [editing, setEditing] = useState<Template | null>(null)
+  const [sorting, setSorting] = useState(false)
+  const cloud = useCloudStatus()
   const beginner = s.workouts.length === 0
   const starter = s.templates.find((t) => t.id === 'tpl-machine-a') ?? s.templates[0]
   const today = todayKey()
@@ -177,7 +196,11 @@ export function HomeScreen({ onStart, onShowDay, onOpenBody }: { onStart: (o: St
 
   const weekWorkouts = s.workouts.filter((w) => week.some((d) => d.date === w.date))
   const todays = s.workouts.filter((w) => w.date === today)
-  const needBackup = s.workouts.length >= 5 && (!s.lastExportAt || Date.now() - s.lastExportAt > 30 * 86400000)
+  // クラウドバックアップが有効で、直近3日以内に成功している間は書き出しの催促を出さない
+  const cloudFresh = cloudConfigured && getCode() !== null && cloud.lastAt !== null && Date.now() - cloud.lastAt < 3 * 86400000 && !cloud.error && !cloud.warn
+  const needBackup = s.workouts.length >= 5 && !cloudFresh && (!s.lastExportAt || Date.now() - s.lastExportAt > 30 * 86400000)
+  const goal = s.settings.weeklyGoal
+  const goalMet = goal !== undefined && weekWorkouts.length >= goal
 
   return (
     <div className="page">
@@ -252,14 +275,27 @@ export function HomeScreen({ onStart, onShowDay, onOpenBody }: { onStart: (o: St
       <Panel
         label="MENU"
         right={
-          <button className="link" onClick={() => setBuilding(true)}>
-            <IconPlus size={14} /> 作成
-          </button>
+          <>
+            {s.templates.length > 1 && (
+              <button className="link" onClick={() => setSorting((v) => !v)}>
+                {sorting ? '完了' : '並べ替え'}
+              </button>
+            )}
+            <button className="link" onClick={() => setBuilding(true)}>
+              <IconPlus size={14} /> 作成
+            </button>
+          </>
         }
       >
         <p className="hint">メニューを選ぶと、種目と動きを確認してから開始できます。</p>
         <ul className="tpl-list">
-          {s.templates.map((t) => (
+          {s.templates.map((t, ti) => sorting ? (
+            <li key={t.id}>
+              <span className="tpl-sort-name">{t.name}</span>
+              <button className="icon-btn" onClick={() => moveTemplate(t.id, -1)} disabled={ti === 0} aria-label={`${t.name}を上へ`}><IconUp size={18} /></button>
+              <button className="icon-btn" onClick={() => moveTemplate(t.id, 1)} disabled={ti === s.templates.length - 1} aria-label={`${t.name}を下へ`}><IconDown size={18} /></button>
+            </li>
+          ) : (
             <li key={t.id}>
               <button className="tpl-row" onClick={() => setPreview(t)}>
                 <span className="tpl-name">{t.name}</span>
@@ -269,6 +305,9 @@ export function HomeScreen({ onStart, onShowDay, onOpenBody }: { onStart: (o: St
                   ))}
                   <span>{t.items.length}種目</span>
                 </span>
+              </button>
+              <button className="link" onClick={() => setEditing(t)} aria-label={`${t.name}を編集`}>
+                編集
               </button>
               <button
                 className="icon-btn"
@@ -310,6 +349,30 @@ export function HomeScreen({ onStart, onShowDay, onOpenBody }: { onStart: (o: St
           <Stat label="連続週" value={weekStreak(s.workouts)} unit="週" />
           <Stat label="今週の総量" value={fmtVolume(weekWorkouts.reduce((n, w) => n + workoutVolume(w), 0))} unit="kg" />
         </div>
+        <div className={`goal-box ${goalMet ? 'goal-done' : ''}`}>
+          {goal === undefined ? (
+            <button className="goal-set" onClick={() => setWeeklyGoal(3)}>
+              週の目標回数を決める（タップで週3回に設定）
+            </button>
+          ) : (
+            <>
+              <div className="goal-row">
+                <button className="goal-mini" onClick={() => setWeeklyGoal(goal - 1)} aria-label={goal <= 1 ? '目標を解除' : '目標を1回減らす'}>
+                  <IconMinus size={18} />
+                </button>
+                <span className="goal-text" aria-live="polite">
+                  今週 <span className="num">{weekWorkouts.length}/{goal}</span>回
+                </span>
+                <button className="goal-mini" onClick={() => setWeeklyGoal(goal + 1)} disabled={goal >= 14} aria-label="目標を1回増やす">
+                  <IconPlus size={18} />
+                </button>
+              </div>
+              <div className="goal-bar" aria-hidden="true"><i style={{ width: `${Math.min(100, (weekWorkouts.length / goal) * 100)}%` }} /></div>
+              {goalMet && <p className="goal-cheer">今週の目標を達成しました。おつかれさまです！</p>}
+              {goal === 1 && !goalMet && <p className="hint">「−」を押すと目標を解除できます。</p>}
+            </>
+          )}
+        </div>
       </Panel>
 
       <Panel label="VOLUME" right={<span className="hint-inline">総挙上量</span>}>
@@ -338,6 +401,7 @@ export function HomeScreen({ onStart, onShowDay, onOpenBody }: { onStart: (o: St
         />
       )}
       {building && <TemplateBuilder onClose={() => setBuilding(false)} />}
+      {editing && <TemplateBuilder template={editing} onClose={() => setEditing(null)} />}
     </div>
   )
 }

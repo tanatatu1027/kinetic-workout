@@ -75,12 +75,12 @@ function useDialogFocus(onEsc: () => void) {
   return ref
 }
 
-export function Sheet({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
+export function Sheet({ title, onClose, children, footer, tall }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; tall?: boolean }) {
   const ref = useDialogFocus(onClose)
   return (
     <div className="sheet-wrap" role="dialog" aria-modal="true" aria-label={title} ref={ref} tabIndex={-1}>
       <div className="sheet-backdrop" onClick={onClose} />
-      <div className="sheet">
+      <div className={`sheet${tall ? ' tall' : ''}`}>
         <header className="sheet-head">
           <h2>{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="閉じる">

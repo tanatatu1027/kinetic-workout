@@ -27,8 +27,22 @@ export default defineConfig({
           { src: 'icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
-      // 種目の写真（jpg）もオフラインで見られるよう事前キャッシュに含める
-      workbox: { globPatterns: ['**/*.{js,css,html,svg,png,jpg,woff2}'] },
+      workbox: {
+        // 種目の写真(jpg)は事前キャッシュに含めず、表示したものだけ端末に保存する（容量節約）
+        globPatterns: ['**/*.{js,css,html,svg,png,jpg,woff2}'],
+        globIgnores: ['exercises/**'],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.includes('/exercises/') && url.pathname.endsWith('.jpg'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'exercise-photos',
+              expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 60 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+        ],
+      },
     }),
   ],
 })

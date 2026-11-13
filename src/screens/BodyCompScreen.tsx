@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Panel } from '../components/Common'
 import { IconBack, IconCheck, IconClose, IconDown, IconNext, IconUp } from '../components/Icons'
 import { TrendChart, type Point } from '../components/TrendChart'
 import { addDays, fmtLong, fromKey, toKey, todayKey } from '../lib/date'
 import { round1 } from '../lib/stats'
 import { flushSave, saveBodyLog, updateSettings, useStore } from '../lib/store'
-import { askChoice, toast } from '../lib/ui'
+import { toast } from '../lib/ui'
 import type { BodyLog } from '../types'
 
 type Key = 'weight' | 'fat' | 'muscle' | 'waist'
@@ -36,6 +36,48 @@ const blank = (date: string): BodyLog => ({ date, weight: null, fat: null, muscl
 
 const same = (a: BodyLog, b: BodyLog) => FIELDS.every((f) => a[f.key] === b[f.key]) && a.note.trim() === b.note.trim()
 
+/** 全角数字・全角記号を半角に直す（日本語キーボードの入力対策） */
+const toHalf = (t: string) =>
+  t
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[．。，、,]/g, '.')
+
+/**
+ * 数字の入力文字列を整える。使えない文字は取り除く。
+ * 小数点が2つ以上（72.5.3 など）や、小数が3桁以上になる入力は不正として null を返す（呼び出し側で入力を受け付けない）
+ */
+const cleanNum = (raw: string): string | null => {
+  const t = toHalf(raw).replace(/[^\d.]/g, '')
+  if ((t.match(/\./g) ?? []).length > 1) return null
+  const frac = t.split('.')[1]
+  if (frac !== undefined && frac.length > 2) return null
+  return t
+}
+
+/** 自動保存の状態表示。入力した値は少し待って自動で保存され、保存できたら控えめに知らせる */
+function AutoSaveStatus({ dirty, justSaved, idleText }: { dirty: boolean; justSaved: boolean; idleText: string }) {
+  return (
+    <p className={`save-state ${dirty ? 'dirty' : justSaved ? 'ok' : 'idle'}`} role="status" aria-live="polite">
+      {dirty ? '入力中…（自動で保存します）' : justSaved ? (<><IconCheck size={16} /> 保存しました</>) : idleText}
+    </p>
+  )
+}
+
+/** 保存済みの表示を一定時間だけ出す */
+function useJustSaved() {
+  const [on, setOn] = useState(false)
+  const t = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(t.current), [])
+  return [
+    on,
+    () => {
+      setOn(true)
+      window.clearTimeout(t.current)
+      t.current = window.setTimeout(() => setOn(false), 2500)
+    },
+  ] as const
+}
+
 /** 数字入力。入力途中の「72.」などを壊さないよう、表示用の文字列を別に持つ */
 function NumField({ value, unit, label, placeholder, onChange }: { value: number | null; unit: string; label: string; placeholder?: string; onChange: (v: number | null) => void }) {
   const [text, setText] = useState(value === null ? '' : String(value))
@@ -47,10 +89,12 @@ function NumField({ value, unit, label, placeholder, onChange }: { value: number
           id={`bf-${label}`}
           className="text num"
           inputMode="decimal"
+          autoComplete="off"
           value={text}
           placeholder={placeholder ?? '---'}
           onChange={(e) => {
-            const t = e.target.value.replace(/[^\d.]/g, '')
+            const t = cleanNum(e.target.value)
+            if (t === null) return // 不正な入力（72.5.3 など）は受け付けない
             const n = parseFloat(t)
             // 保存データの検証上限（%は100、その他は500）を超える入力は受け付けない
             if (Number.isFinite(n) && n > (unit === '%' ? 100 : 500)) return
@@ -92,7 +136,7 @@ const bmiLabel = (bmi: number) => (bmi < 18.5 ? '低体重' : bmi < 25 ? '標準
 
 const signed = (n: number) => `${n > 0 ? '+' : ''}${round1(n)}`
 
-/** 身長・目標体重。入力してから「保存」を押した時だけ反映する */
+/** 身長・目標体重。有効な値になったら少し待って自動で保存する */
 function ProfilePanel({ latestWeight, first30 }: { latestWeight: number | null; first30: number | null }) {
   const s = useStore()
   const { heightCm, goalWeight: goal } = s.settings
@@ -105,15 +149,31 @@ function ProfilePanel({ latestWeight, first30 }: { latestWeight: number | null; 
   const heightOk = h === null || (Number.isFinite(h) && h >= 50 && h <= 260)
   const goalOk = g === null || (Number.isFinite(g) && g > 0 && g <= 500)
   const dirty = h !== heightCm || g !== goal
+  const valid = heightOk && goalOk && !Number.isNaN(h) && !Number.isNaN(g)
+  const [justSaved, markSaved] = useJustSaved()
 
   const save = () => {
-    if (!heightOk) return toast('身長は50〜260cmの範囲で入力してください')
-    if (!goalOk) return toast('目標体重は1〜500kgの範囲で入力してください')
     updateSettings({ heightCm: h, goalWeight: g })
-    if (flushSave()) toast('身長・目標体重を保存しました')
+    if (flushSave()) markSaved()
   }
+  const saveRef = useRef(save)
+  saveRef.current = save
 
-  const clean = (t: string) => t.replace(/[^\d.]/g, '')
+  useEffect(() => {
+    if (!dirty || !valid) return
+    const id = window.setTimeout(() => saveRef.current(), 800)
+    return () => window.clearTimeout(id)
+  }, [dirty, valid, height, goalText])
+
+  // 画面を離れるときに、有効な入力が残っていれば保存する
+  const pending = useRef({ dirty, valid })
+  pending.current = { dirty, valid }
+  useEffect(() => () => {
+    if (pending.current.dirty && pending.current.valid) saveRef.current()
+  }, [])
+
+  const setH = (t: string) => { const c = cleanNum(t); if (c !== null) setHeight(c) }
+  const setG = (t: string) => { const c = cleanNum(t); if (c !== null) setGoalText(c) }
 
   return (
     <Panel label="PROFILE" right={<span className="hint-inline">身長・目標</span>}>
@@ -121,19 +181,23 @@ function ProfilePanel({ latestWeight, first30 }: { latestWeight: number | null; 
         <div className="body-field">
           <label htmlFor="pf-height">身長</label>
           <div className="body-input">
-            <input id="pf-height" className="text num" inputMode="decimal" value={height} placeholder="例 170" onChange={(e) => setHeight(clean(e.target.value))} />
+            <input id="pf-height" className="text num" inputMode="decimal" value={height} placeholder="例 170" onChange={(e) => setH(e.target.value)} />
             <span className="unit">cm</span>
           </div>
         </div>
         <div className="body-field">
           <label htmlFor="pf-goal">目標体重</label>
           <div className="body-input">
-            <input id="pf-goal" className="text num" inputMode="decimal" value={goalText} placeholder="例 68" onChange={(e) => setGoalText(clean(e.target.value))} />
+            <input id="pf-goal" className="text num" inputMode="decimal" value={goalText} placeholder="例 68" onChange={(e) => setG(e.target.value)} />
             <span className="unit">kg</span>
           </div>
         </div>
       </div>
-      <SaveBar dirty={dirty} onSave={save} savedText={`保存済み: 身長 ${heightCm === null ? '未設定' : `${heightCm}cm`} ／ 目標 ${goal === null ? '未設定' : `${goal}kg`}`} />
+      {dirty && !valid ? (
+        <p className="save-state dirty" role="status">{!heightOk ? '身長は50〜260cmの範囲で入力してください' : '目標体重は1〜500kgの範囲で入力してください'}</p>
+      ) : (
+        <AutoSaveStatus dirty={dirty} justSaved={justSaved} idleText={`身長 ${heightCm === null ? '未設定' : `${heightCm}cm`} ／ 目標 ${goal === null ? '未設定' : `${goal}kg`}（自動保存）`} />
+      )}
       <p className="hint">身長はBMIの計算に、目標体重は体重グラフの目標線に使われます。</p>
 
       {goal !== null && latestWeight !== null && (
@@ -150,21 +214,8 @@ function ProfilePanel({ latestWeight, first30 }: { latestWeight: number | null; 
   )
 }
 
-/** 保存ボタンと状態表示。未保存か保存済みかを必ず文字で示す */
-function SaveBar({ dirty, onSave, savedText }: { dirty: boolean; onSave: () => void; savedText: string }) {
-  return (
-    <div className="save-bar">
-      <p className={`save-state ${dirty ? 'dirty' : 'ok'}`} role="status">
-        {dirty ? '未保存の変更があります' : (<><IconCheck size={14} /> {savedText}</>)}
-      </p>
-      <button className="btn primary" disabled={!dirty} onClick={onSave}>
-        保存
-      </button>
-    </div>
-  )
-}
-
-export function BodyCompScreen() {
+/** 体組成。embedded のときは分析画面の中に組み込まれる（ページ枠と見出しは親が持つ） */
+export function BodyCompScreen({ embedded = false }: { embedded?: boolean }) {
   const s = useStore()
   const today = todayKey()
   const [date, setDate] = useState(today)
@@ -182,11 +233,24 @@ export function BodyCompScreen() {
   const calc = derive(draft, heightCm)
 
   const patch = (p: Partial<BodyLog>) => setDraft((d) => ({ ...d, ...p }))
+  const [justSaved, markSaved] = useJustSaved()
 
+  // 入力は少し待って自動で保存する。日付の移動・画面を離れるときは待たずに保存する
   const save = () => {
     saveBodyLog({ ...draft, note: draft.note.trim() })
-    if (flushSave()) toast(`${fmtLong(date)} の記録を保存しました`)
+    if (flushSave()) markSaved()
+    else toast('保存に失敗しました。バックアップを書き出してください')
   }
+  const saveRef = useRef(save)
+  saveRef.current = save
+  const dirtyRef = useRef(dirty)
+  dirtyRef.current = dirty
+
+  useEffect(() => {
+    if (!dirty) return
+    const id = window.setTimeout(() => saveRef.current(), 800)
+    return () => window.clearTimeout(id)
+  }, [dirty, draft])
 
   const open = (next: string) => {
     setDate(next)
@@ -194,26 +258,34 @@ export function BodyCompScreen() {
     setRev((n) => n + 1)
   }
 
-  const go = async (next: string) => {
+  const go = (next: string) => {
     if (next > today || next === date) return
-    if (dirty) {
-      const choice = await askChoice({ title: '保存していない入力があります', body: `${fmtLong(date)} の入力を保存しますか？`, ok: '保存して移動', alt: '保存せず移動' })
-      if (choice === 'cancel') return
-      if (choice === 'ok') save()
-    }
+    if (dirty) save()
     open(next)
   }
-  const move = (d: number) => void go(toKey(addDays(fromKey(date), d)))
+  const move = (d: number) => go(toKey(addDays(fromKey(date), d)))
 
-  // 保存せずに別の画面へ移った場合は、入力が残らなかったことを知らせる
-  const dirtyRef = useRef(dirty)
-  dirtyRef.current = dirty
-  useEffect(
-    () => () => {
-      if (dirtyRef.current) toast('体組成の入力は保存されませんでした（保存ボタンを押すと記録されます）')
-    },
-    [],
-  )
+  // 画面を離れるとき（別のタブへ移るなど）に、未保存の入力が残っていれば保存する
+  const unmountSave = useRef(() => {})
+  unmountSave.current = () => {
+    if (!dirtyRef.current) return
+    saveBodyLog({ ...draft, note: draft.note.trim() })
+    flushSave()
+  }
+  useEffect(() => () => unmountSave.current(), [])
+
+  // 日付をまたいだとき、「今日」を見ていたなら新しい今日へ移る（入力中でも内容は先に保存する）
+  const lastToday = useRef(today)
+  useEffect(() => {
+    if (lastToday.current === today) return
+    const wasToday = date === lastToday.current
+    lastToday.current = today
+    if (wasToday) {
+      if (dirtyRef.current) save()
+      open(today)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [today])
 
   const charts = useMemo(() => {
     const since = range ? toKey(addDays(new Date(), -range)) : ''
@@ -270,18 +342,16 @@ export function BodyCompScreen() {
   const hidden = charts.filter((c) => c.points.length === 0)
   const isSaved = s.bodyLogs.some((b) => b.date === date)
 
-  return (
-    <div className="page">
-      <header className="page-head">
-        <h1>BODY COMP</h1>
-      </header>
+  const Wrap = embedded ? Fragment : PageWrap
 
+  return (
+    <Wrap>
       <Panel label="RECORD" right={<span className="hint-inline">今日の体を記録</span>}>
         <div className="cal-nav">
           <button className="icon-btn" onClick={() => move(-1)} aria-label="前の日"><IconBack /></button>
           <div className="date-pick">
             <h2 className="num">{fmtLong(date)}</h2>
-            {date !== today && <button className="link" onClick={() => void go(today)}>今日へ</button>}
+            {date !== today && <button className="link" onClick={() => go(today)}>今日へ</button>}
           </div>
           <button className="icon-btn" onClick={() => move(1)} aria-label="次の日" disabled={date >= today}><IconNext /></button>
         </div>
@@ -303,8 +373,8 @@ export function BodyCompScreen() {
           <span>メモ</span>
           <textarea key={rev} className="text" rows={2} maxLength={500} defaultValue={draft.note} onChange={(e) => patch({ note: e.target.value })} placeholder="食事・睡眠・体調など" />
         </label>
-        <SaveBar dirty={dirty} onSave={save} savedText={isSaved ? 'この日の記録は保存済みです' : 'まだ記録がありません'} />
-        <p className="hint">入力したら「保存」を押してください。測らなかった項目は空欄のままで構いません。</p>
+        <AutoSaveStatus dirty={dirty} justSaved={justSaved} idleText={isSaved ? 'この日の記録があります（入力は自動で保存されます）' : '入力すると自動で保存されます'} />
+        <p className="hint">測らなかった項目は空欄のままで構いません。</p>
       </Panel>
 
       <Panel label="TREND" right={<span className="hint-inline">推移グラフ</span>}>
@@ -362,6 +432,18 @@ export function BodyCompScreen() {
       </Panel>
 
       <ProfilePanel latestWeight={latestWeight} first30={first30} />
+    </Wrap>
+  )
+}
+
+/** 単独表示のときのページ枠 */
+function PageWrap({ children }: { children: ReactNode }) {
+  return (
+    <div className="page">
+      <header className="page-head">
+        <h1>BODY COMP</h1>
+      </header>
+      {children}
     </div>
   )
 }
