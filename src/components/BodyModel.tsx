@@ -1,38 +1,11 @@
 import { useEffect, useRef } from 'react'
-import {
-  AmbientLight,
-  BoxGeometry,
-  BufferAttribute,
-  BufferGeometry,
-  Color,
-  DirectionalLight,
-  DoubleSide,
-  Group,
-  LinearFilter,
-  LinearMipmapLinearFilter,
-  Mesh,
-  MeshBasicMaterial,
-  MeshStandardMaterial,
-  NearestFilter,
-  PerspectiveCamera,
-  Raycaster,
-  RingGeometry,
-  Scene,
-  SphereGeometry,
-  Texture,
-  Vector2,
-  Vector3,
-  WebGLRenderer,
-} from 'three'
 import { REGIONS, type Region } from '../data/regions'
-import meta from '../assets/body-meta.json'
 import frontUrl from '../assets/body-front.png'
 import backUrl from '../assets/body-back.png'
-import depthUrl from '../assets/body-depth.png'
 
 export interface RegionLook {
   color: string
-  /** 0〜1。発光の強さ（回復途中の疲労が強いほど大きい） */
+  /** 0〜1。明るさの強さ（回復途中の疲労が強いほど大きい） */
   strength: number
 }
 
@@ -49,18 +22,22 @@ interface Props {
 }
 
 const ORDER: Region[] = REGIONS.map((r) => r.id)
-const NR = ORDER.length
 
 /**
- * 筋肉図のシルエットを膨らませて作った3Dの体。
- * 正面側・背面側の厚みは body-depth.png（R=正面, G=背面, B=シルエット）。
- * 筋肉の模様は body-front.png / body-back.png（R=形, G=部位ID）を貼る。頭は別の楕円体。
- * 画像は scripts/make-body-textures.py で作る。
+ * 筋肉図（正面・背面）を、ターンテーブルのように横幅を縮めながら入れ替えて360°回す。
+ * テクスチャは R=線と筋肉の形、G=部位ID（ORDERの順+1）。scripts/make-body-textures.py で作成。
  */
-const WORLD_H = 2.08 // 体の高さ（頭のてっぺん〜足元）
-const FOOT_Y = -1.08
-const SC = WORLD_H / (meta.bodyBottom - meta.headTop) // グリッド1マスのワールド長
-const SKIN = new Color('#161f2a')
+interface View {
+  w: number
+  h: number
+  lum: Uint8Array
+  reg: Uint8Array
+  /** 部位ごとの画素番号 */
+  pix: number[][]
+  off: HTMLCanvasElement
+  ctx: CanvasRenderingContext2D
+  img: ImageData
+}
 
 const loadImage = (src: string) =>
   new Promise<HTMLImageElement>((res, rej) => {
@@ -70,91 +47,32 @@ const loadImage = (src: string) =>
     i.src = src
   })
 
-const pixels = (img: HTMLImageElement) => {
-  const c = document.createElement('canvas')
-  c.width = img.naturalWidth
-  c.height = img.naturalHeight
-  const x = c.getContext('2d', { willReadFrequently: true })!
-  x.drawImage(img, 0, 0)
-  return x.getImageData(0, 0, c.width, c.height)
-}
-
-interface BodyData {
-  geo: BufferGeometry
-  nFront: number
-  frontImg: HTMLImageElement
-  backImg: HTMLImageElement
-  ids: [Uint8Array, Uint8Array]
-  texW: number
-  texH: number
-}
-
-/** 厚みの画像から、正面・背面の2枚の面でできた体のメッシュを作る */
-async function loadBody(): Promise<BodyData> {
-  const [dImg, frontImg, backImg] = await Promise.all([loadImage(depthUrl), loadImage(frontUrl), loadImage(backUrl)])
-  const d = pixels(dImg).data
-  const W = dImg.naturalWidth
-  const H = dImg.naturalHeight
-  const at = (i: number, j: number) => (j * W + i) * 4
-  const inside = (i: number, j: number) => i >= 0 && j >= 0 && i < W && j < H && d[at(i, j) + 2] > 127
-
-  const idx = new Int32Array(W * H).fill(-1)
-  const pos: number[] = []
-  const uv: number[] = []
-  const side: number[] = []
-  const emit = (s: 0 | 1) => {
-    for (let j = 0; j < H; j++) {
-      for (let i = 0; i < W; i++) {
-        if (!inside(i, j)) continue
-        const t = (d[at(i, j) + s] / 255) * meta.depthMax * SC
-        const k = pos.length / 3
-        if (s === 0) idx[j * W + i] = k
-        pos.push((i - W / 2) * SC, FOOT_Y + (meta.bodyBottom - j) * SC, s === 0 ? t : -t)
-        uv.push(i / (W - 1), 1 - j / (H - 1))
-        side.push(s)
-      }
-    }
+async function loadView(src: string): Promise<View> {
+  const im = await loadImage(src)
+  const w = im.naturalWidth
+  const h = im.naturalHeight
+  const off = document.createElement('canvas')
+  off.width = w
+  off.height = h
+  const ctx = off.getContext('2d', { willReadFrequently: true })!
+  ctx.drawImage(im, 0, 0)
+  const src4 = ctx.getImageData(0, 0, w, h).data
+  const lum = new Uint8Array(w * h)
+  const reg = new Uint8Array(w * h)
+  const pix: number[][] = ORDER.map(() => [])
+  for (let p = 0; p < w * h; p++) {
+    lum[p] = src4[p * 4]
+    const g = src4[p * 4 + 1]
+    reg[p] = g
+    if (g > 0 && g <= ORDER.length) pix[g - 1].push(p)
   }
-  emit(0)
-  const nFront = pos.length / 3
-  emit(1)
-  // 背面の頂点番号は、正面と同じ並びで nFront を足したもの
-  const index: number[] = []
-  const vi = (i: number, j: number) => idx[j * W + i]
-  for (let j = 0; j < H - 1; j++) {
-    for (let i = 0; i < W - 1; i++) {
-      if (!(inside(i, j) && inside(i + 1, j) && inside(i, j + 1) && inside(i + 1, j + 1))) continue
-      const a = vi(i, j)
-      const b = vi(i + 1, j)
-      const c = vi(i, j + 1)
-      const e = vi(i + 1, j + 1)
-      // 正面：上から見て反時計回り
-      index.push(a, c, b, b, c, e)
-      // 背面：逆向き
-      index.push(a + nFront, b + nFront, c + nFront, b + nFront, e + nFront, c + nFront)
-    }
-  }
-  const geo = new BufferGeometry()
-  geo.setAttribute('position', new BufferAttribute(new Float32Array(pos), 3))
-  geo.setAttribute('uv', new BufferAttribute(new Float32Array(uv), 2))
-  geo.setAttribute('aSide', new BufferAttribute(new Float32Array(side), 1))
-  geo.setIndex(index)
-  geo.computeVertexNormals()
-
-  const ids = [frontImg, backImg].map((im) => {
-    const px = pixels(im).data
-    const out = new Uint8Array(px.length / 4)
-    for (let p = 0; p < out.length; p++) out[p] = px[p * 4 + 1]
-    return out
-  }) as [Uint8Array, Uint8Array]
-  return { geo, nFront, frontImg, backImg, ids, texW: frontImg.naturalWidth, texH: frontImg.naturalHeight }
+  return { w, h, lum, reg, pix, off, ctx, img: ctx.createImageData(w, h) }
 }
 
-/** 輪郭の白い縁取り（体のふち）を、面の向きから作る */
-const RIM_GLSL = `
-  float rimK = 1.0 - abs(dot(normal, normalize(vViewPosition)));
-  totalEmissiveRadiance += vec3(0.95, 0.97, 1.0) * smoothstep(0.68, 0.86, rimK);
-`
+const hex = (c: string): [number, number, number] => {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(c)
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [255, 255, 255]
+}
 
 export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAngle, paused }: Props) {
   const host = useRef<HTMLDivElement>(null)
@@ -172,163 +90,26 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
   useEffect(() => {
     const el = host.current
     if (!el) return
-
-    let renderer: WebGLRenderer
-    try {
-      renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' })
-    } catch {
+    const canvas = document.createElement('canvas')
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
       onUnsupported?.()
       return
     }
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-    renderer.setClearColor(0x000000, 0)
-    const canvas = renderer.domElement
     canvas.className = 'body-canvas'
     canvas.setAttribute('role', 'img')
-    canvas.setAttribute('aria-label', '人体モデル。ドラッグで回転、部位をタップで選択')
+    canvas.setAttribute('aria-label', '人体の筋肉図。ドラッグで回転、部位をタップで選択')
     el.appendChild(canvas)
 
-    const scene = new Scene()
-    const camera = new PerspectiveCamera(30, 1, 0.1, 50)
-    camera.position.set(0, 0.02, 4.5)
-    scene.add(new AmbientLight(0xffffff, 0.9))
-    const key = new DirectionalLight(0xffffff, 1.6)
-    key.position.set(2, 3, 4)
-    scene.add(key)
-    const back = new DirectionalLight(0xffffff, 1.0)
-    back.position.set(-2, 2, -4)
-    scene.add(back)
-    const rim = new DirectionalLight(0x22d3ee, 0.8)
-    rim.position.set(-3, 1, 0)
-    scene.add(rim)
-
     let disposed = false
-    const disposables: { dispose: () => void }[] = []
-    const track = <T extends { dispose: () => void }>(o: T) => {
-      disposables.push(o)
-      return o
-    }
-
-    const body = new Group()
-    scene.add(body)
-
-    // 体表シェーダー：貼った模様の部位IDごとに、回復状況の色を塗る
-    const uniforms = {
-      tLumF: { value: null as Texture | null },
-      tLumB: { value: null as Texture | null },
-      tIdF: { value: null as Texture | null },
-      tIdB: { value: null as Texture | null },
-      uCol: { value: ORDER.map(() => new Color('#4a5d6e')) },
-      uAmt: { value: ORDER.map(() => 0) },
-      uSel: { value: ORDER.map(() => 0) },
-      uSkin: { value: SKIN },
-    }
-    const bodyMat = track(new MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0.0 }))
-    bodyMat.onBeforeCompile = (sh) => {
-      Object.assign(sh.uniforms, uniforms)
-      sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', 'attribute float aSide;\nvarying float vSide;\nvarying vec2 vTuv;\nvarying float vFace;\n#include <common>')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSide = aSide; vTuv = uv; vFace = abs(normal.z);')
-      sh.fragmentShader = sh.fragmentShader
-        .replace(
-          '#include <common>',
-          `#include <common>
-          varying float vSide; varying vec2 vTuv; varying float vFace;
-          uniform sampler2D tLumF; uniform sampler2D tLumB; uniform sampler2D tIdF; uniform sampler2D tIdB;
-          uniform vec3 uCol[${NR}]; uniform float uAmt[${NR}]; uniform float uSel[${NR}];
-          uniform vec3 uSkin;
-          float gLum = 0.0; vec3 gEm = vec3(0.0);`,
-        )
-        .replace(
-          '#include <color_fragment>',
-          `float lumF = texture2D(tLumF, vTuv).r; float lumB = texture2D(tLumB, vTuv).r;
-          float idF = texture2D(tIdF, vTuv).g; float idB = texture2D(tIdB, vTuv).g;
-          float isB = step(0.5, vSide);
-          float lum = mix(lumF, lumB, isB) * smoothstep(0.18, 0.5, vFace); // 真横の急な面は模様が伸びるので薄くする
-          int rid = int(mix(idF, idB, isB) * 255.0 + 0.5);
-          vec3 mcol = vec3(0.29, 0.36, 0.43); float amt = 0.0; float sel = 0.0;
-          for (int k = 0; k < ${NR}; k++) {
-            if (k + 1 == rid) { mcol = uCol[k]; amt = uAmt[k]; sel = uSel[k]; }
-          }
-          diffuseColor.rgb = mix(uSkin, mcol, lum);
-          gEm = (mcol * (0.10 + 0.34 * amt) + vec3(1.0) * sel) * lum;`,
-        )
-        .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += gEm;\n${RIM_GLSL}`)
-    }
-
-    // 頭は別の楕円体（輪郭の縁取りだけ）
-    const headMat = track(new MeshStandardMaterial({ color: SKIN, roughness: 0.5, metalness: 0.0 }))
-    headMat.onBeforeCompile = (sh) => {
-      sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\n${RIM_GLSL}`)
-    }
-    const headTop = FOOT_Y + (meta.bodyBottom - meta.headTop) * SC
-    const headBottom = FOOT_Y + (meta.bodyBottom - meta.neckY) * SC
-    const headR = (meta.headW / 2) * SC
-    const headGeo = track(new SphereGeometry(1, 48, 36))
-    // あご側を細くして、卵ではなく頭の形にする
-    const hp = headGeo.attributes.position
-    for (let i = 0; i < hp.count; i++) {
-      const y = hp.getY(i)
-      if (y < 0) {
-        const f = 1 + 0.2 * y
-        hp.setX(i, hp.getX(i) * f)
-        hp.setZ(i, hp.getZ(i) * f)
-      }
-    }
-    headGeo.computeVertexNormals()
-    const head = new Mesh(headGeo, headMat)
-    head.scale.set(headR, (headTop - headBottom) / 2, headR * 1.0)
-    head.position.set((meta.headCx - meta.gridW / 2) * SC, (headTop + headBottom) / 2, headR * 0.1)
-    body.add(head)
-
-    let bodyMesh: Mesh | null = null
-    let data: BodyData | null = null
-    loadBody()
-      .then((bd) => {
-        if (disposed) {
-          bd.geo.dispose()
-          return
-        }
-        data = bd
-        const mk = (img: HTMLImageElement, nearest: boolean) => {
-          const t = track(new Texture(img))
-          t.minFilter = nearest ? NearestFilter : LinearMipmapLinearFilter
-          t.magFilter = nearest ? NearestFilter : LinearFilter
-          t.generateMipmaps = !nearest
-          t.anisotropy = 4
-          t.needsUpdate = true
-          return t
-        }
-        uniforms.tLumF.value = mk(bd.frontImg, false)
-        uniforms.tLumB.value = mk(bd.backImg, false)
-        uniforms.tIdF.value = mk(bd.frontImg, true)
-        uniforms.tIdB.value = mk(bd.backImg, true)
-        track(bd.geo)
-        bodyMesh = new Mesh(bd.geo, bodyMat)
-        body.add(bodyMesh)
+    let views: [View, View] | null = null // [正面, 背面]
+    Promise.all([loadView(frontUrl), loadView(backUrl)])
+      .then((v) => {
+        if (!disposed) views = v
       })
       .catch(() => {
         if (!disposed) onUnsupported?.()
       })
-
-    // 足元のHUDリング
-    const hud = new Group()
-    hud.position.y = -1.1
-    hud.rotation.x = -Math.PI / 2
-    scene.add(hud)
-    const ringMat = track(new MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.55, side: DoubleSide }))
-    const ring1 = track(new RingGeometry(0.52, 0.535, 72))
-    const ring2 = track(new RingGeometry(0.66, 0.67, 72, 1, 0, Math.PI * 1.5))
-    hud.add(new Mesh(ring1, ringMat), new Mesh(ring2, ringMat))
-    const ticks = new Group()
-    for (let i = 0; i < 24; i++) {
-      const t = new Mesh(track(new BoxGeometry(0.008, i % 6 === 0 ? 0.07 : 0.035, 0.001)), ringMat)
-      const a = (i / 24) * Math.PI * 2
-      t.position.set(Math.cos(a) * 0.58, Math.sin(a) * 0.58, 0)
-      t.rotation.z = a + Math.PI / 2
-      ticks.add(t)
-    }
-    hud.add(ticks)
 
     // 回転・操作
     let rotY = 0.5
@@ -337,56 +118,48 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
     let spin = true
     let down: { x: number; y: number; t: number; lastX: number; moved: boolean; id: number } | null = null
     let lastMoveT = 0
-    const ray = new Raycaster()
-    const pointer = new Vector2()
-    const tmp = new Vector3()
+    let cw = 0
+    let ch = 0
+    let dpr = 1
 
-    /** 画面上の1点から、当たった体表の部位を調べる（当たらなければ null） */
-    const regionAt = (cx: number, cy: number, fuzzy: number): Region | null => {
-      if (!bodyMesh || !data) return null
-      const r = canvas.getBoundingClientRect()
-      pointer.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1)
-      ray.setFromCamera(pointer, camera)
-      const hit = ray.intersectObject(bodyMesh, false)[0]
-      if (!hit || !hit.uv || !hit.face) return null
-      const s = hit.face.a < data.nFront ? 0 : 1
-      const { texW, texH } = data
-      const ids = data.ids[s]
-      const px = hit.uv.x * (texW - 1)
-      const py = (1 - hit.uv.y) * (texH - 1)
-      // 画面の30px相当を、画像のピクセルに換算して探す
-      tmp.set(0, 0, 0).project(camera)
-      const pxPerWorld = r.height / (2 * Math.tan((camera.fov * Math.PI) / 360) * camera.position.z)
-      const texPerPx = (4 / SC) / pxPerWorld
-      const rad = Math.max(2, fuzzy * texPerPx)
-      let best = 0
+    // 図の配置（正面・背面で共通）
+    const layout = () => {
+      const v = views?.[0]
+      if (!v) return null
+      const s = Math.min(ch / v.h, cw / v.w)
+      return { s, ox: cw / 2, oy: (ch - v.h * s) / 2, v }
+    }
+    const facing = () => Math.cos(rotY)
+
+    const pick = (cx: number, cy: number) => {
+      const L = layout()
+      if (!L || !views) return
+      const k = facing()
+      if (Math.abs(k) < 0.3) return
+      const view = k > 0 ? views[0] : views[1]
+      const rect = canvas.getBoundingClientRect()
+      const px = cx - rect.left
+      const py = cy - rect.top
+      const sx = L.s * Math.abs(k)
+      const u = (px - L.ox) / sx + view.w / 2
+      const v = (py - L.oy) / L.s
+      // ぴったり当たらなくても、指の大きさ分（約24px）の範囲で最も近い部位を選ぶ
+      const rx = 24 / sx
+      const ry = 24 / L.s
+      let best = -1
       let bestD = Infinity
-      for (let dy = -rad; dy <= rad; dy += 3) {
-        for (let dx = -rad; dx <= rad; dx += 3) {
-          const x = Math.round(px + dx)
-          const y = Math.round(py + dy)
-          if (x < 0 || y < 0 || x >= texW || y >= texH) continue
-          const g = ids[y * texW + x]
-          if (!g || g > NR) continue
-          const dd = Math.hypot(dx, dy)
-          if (dd <= rad && dd < bestD) {
-            bestD = dd
-            best = g
+      for (let y = Math.max(0, Math.floor(v - ry)); y <= Math.min(view.h - 1, Math.ceil(v + ry)); y += 2) {
+        for (let x = Math.max(0, Math.floor(u - rx)); x <= Math.min(view.w - 1, Math.ceil(u + rx)); x += 2) {
+          const g = view.reg[y * view.w + x]
+          if (!g || g > ORDER.length) continue
+          const d = Math.hypot((x - u) * sx, (y - v) * L.s)
+          if (d < bestD && d <= 24) {
+            bestD = d
+            best = g - 1
           }
         }
       }
-      return best ? ORDER[best - 1] : null
-    }
-    const pick = (cx: number, cy: number) => {
-      let region = regionAt(cx, cy, 14)
-      if (!region) {
-        // 細い部位は指がずれやすいので、周りも少し探す
-        for (let a = 0; a < 8 && !region; a++) {
-          const ang = (a / 8) * Math.PI * 2
-          region = regionAt(cx + Math.cos(ang) * 16, cy + Math.sin(ang) * 16, 6)
-        }
-      }
-      if (region) latest.current.onToggle(region)
+      if (best >= 0) latest.current.onToggle(ORDER[best])
     }
 
     const onDown = (e: PointerEvent) => {
@@ -438,15 +211,63 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
       const w = el.clientWidth
       const h = el.clientHeight
       if (!w || !h) return
-      renderer.setSize(w, h, false)
-      camera.aspect = w / h
-      // 狭い幅でも全身が入るようにカメラを引く
-      camera.position.z = Math.max(4.5, 4.5 * (0.62 / camera.aspect))
-      camera.updateProjectionMatrix()
+      dpr = Math.min(window.devicePixelRatio || 1, 2)
+      cw = w
+      ch = h
+      canvas.width = Math.round(w * dpr)
+      canvas.height = Math.round(h * dpr)
     }
     const ro = new ResizeObserver(resize)
     ro.observe(el)
     resize()
+
+    // 部位ごとの色を画素に塗る（色や選択が変わった部位だけ更新する）
+    const paintKey: string[][] = [[], []]
+    const paint = (vi: number, time: number) => {
+      const view = views![vi]
+      const { look: lk, selected: sel } = latest.current
+      const pulse = 0.5 + 0.5 * Math.sin(time * 0.006)
+      const out = view.img.data
+      let dirty = false
+      ORDER.forEach((region, i) => {
+        const l = lk[region]
+        const isSel = sel.includes(region)
+        const key = `${l.color}|${l.strength.toFixed(2)}|${isSel ? pulse.toFixed(2) : '-'}`
+        if (paintKey[vi][i] === key) return
+        paintKey[vi][i] = key
+        dirty = true
+        const [r, g, b] = hex(l.color)
+        // 回復途中の疲労が強いほど少し明るく、選択中は白へ脈打つ
+        const boost = 0.9 + 0.2 * l.strength
+        const mix = isSel ? 0.25 + 0.3 * pulse : 0
+        const R = Math.min(255, (r * boost) * (1 - mix) + 255 * mix)
+        const G = Math.min(255, (g * boost) * (1 - mix) + 255 * mix)
+        const B = Math.min(255, (b * boost) * (1 - mix) + 255 * mix)
+        for (const p of view.pix[i]) {
+          out[p * 4] = R
+          out[p * 4 + 1] = G
+          out[p * 4 + 2] = B
+          out[p * 4 + 3] = view.lum[p]
+        }
+      })
+      if (dirty) view.ctx.putImageData(view.img, 0, 0)
+    }
+
+    // 初回に、部位なしの画素（輪郭・内転筋など）を白で塗る
+    const initBase = (vi: number) => {
+      const view = views![vi]
+      const out = view.img.data
+      for (let p = 0; p < view.w * view.h; p++) {
+        const g = view.reg[p]
+        if (g === 0 || g > ORDER.length) {
+          out[p * 4] = 255
+          out[p * 4 + 1] = 255
+          out[p * 4 + 2] = 255
+          out[p * 4 + 3] = view.lum[p]
+        }
+      }
+    }
+    const ready = [false, false]
 
     let raf = 0
     let lastAngleReport = -1
@@ -478,25 +299,30 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
         vel *= Math.pow(0.94, f)
         if (Math.abs(vel) < 0.0004) vel = 0
       }
-      body.rotation.y = rotY
-      ticks.rotation.z = time * 0.0003
-      hud.rotation.z = -time * 0.0001
-
-      const { look: lk, selected: sel } = latest.current
-      const pulse = 0.5 + 0.5 * Math.sin(time * 0.006)
-      ORDER.forEach((region, i) => {
-        const l = lk[region]
-        uniforms.uCol.value[i].set(l.color)
-        uniforms.uAmt.value[i] = l.strength
-        uniforms.uSel.value[i] = sel.includes(region) ? 0.22 + 0.16 * pulse : 0
-      })
 
       const deg = Math.round((((rotY * 180) / Math.PI) % 360 + 360) % 360)
       if (deg !== lastAngleReport) {
         lastAngleReport = deg
         latest.current.onAngle?.(deg)
       }
-      renderer.render(scene, camera)
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      const L = layout()
+      if (!views || !L) return
+      const k = facing()
+      const vi = k >= 0 ? 0 : 1
+      if (!ready[vi]) {
+        initBase(vi)
+        ready[vi] = true
+      }
+      paint(vi, time)
+      const view = views[vi]
+      // 横幅を cos で縮める。真横を向く瞬間に、うっすら線だけ残す
+      const sx = Math.max(0.02, Math.abs(k))
+      ctx.setTransform(dpr * L.s * sx, 0, 0, dpr * L.s, dpr * L.ox, dpr * L.oy)
+      ctx.imageSmoothingQuality = 'high'
+      ctx.drawImage(view.off, -view.w / 2, 0)
     }
     raf = requestAnimationFrame(frame)
 
@@ -506,9 +332,6 @@ export function BodyModel({ look, selected, onToggle, snap, onUnsupported, onAng
       ro.disconnect()
       io.disconnect()
       api.current = null
-      for (const d of disposables) d.dispose()
-      renderer.dispose()
-      renderer.forceContextLoss()
       canvas.remove()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
